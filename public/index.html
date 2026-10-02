@@ -29,7 +29,13 @@
     <section id="appView" class="hidden">
       <header class="app-header">
         <div><span class="eyebrow">SCP Study</span><h1>Announcements</h1></div>
-        <div class="account"><span id="accountLabel"></span><button id="logoutBtn" class="icon-action" title="Sign out" aria-label="Sign out">↪</button></div>
+        <div class="app-header-actions">
+          <nav class="app-links" aria-label="SCP apps">
+            <a href="https://scp-study.ksariash.workers.dev/" target="_blank" rel="noopener">Study</a>
+            <a href="https://scp-study-analytics.ksariash.workers.dev/" target="_blank" rel="noopener">Dashboard</a>
+          </nav>
+          <div class="account"><span id="accountLabel"></span><button id="logoutBtn" class="icon-action" title="Sign out" aria-label="Sign out">↪</button></div>
+        </div>
       </header>
 
       <nav class="tabs" aria-label="Sections">
@@ -59,6 +65,12 @@
           </div>
           <div id="richEditor" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Write your message…"></div>
         </div>
+
+        <label class="message-media-field">
+          <span>Media attachments <small>optional</small></span>
+          <input id="messageMedia" type="file" accept="image/*,audio/*,video/*" multiple>
+          <small>Attach up to 3 images, audio files, or videos, 10 MB each.</small>
+        </label>
 
         <section id="pollFields" class="poll-fields hidden">
           <div class="section-head"><h2>Poll options</h2><button id="addPollOption" class="quiet compact" type="button">+ Option</button></div>
