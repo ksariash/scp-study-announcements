@@ -94,7 +94,7 @@ When a provider call fails, log the provider HTTP status and sanitized response 
 
 A `feedback_request` is a typed announcement. It uses the sender's Chabura-announcement permission (or broadcast permission for all-student sends). Each recipient gets a random invitation token and a targeted inbox row.
 
-Student replies are anonymous to the sender. Invitation URLs must never contain installation IDs.
+Student replies are anonymous by default. A student may optionally supply name, email, and/or phone when they want a direct reply; never infer identity from the invitation token. Invitation URLs must never contain installation IDs.
 
 Media attachments are stored in the existing Cloudflare R2 bucket through the `MEDIA` binding under `feedback-media/<zman>/...`. Accepted files are images, audio, and video only, at most 3 files, 10 MB each, 20 MB total. Media is not publicly bucket-addressable; the admin/sender downloads through an authenticated Worker route.
 
