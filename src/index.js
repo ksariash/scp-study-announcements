@@ -80,6 +80,13 @@ async function ensureSchema(env){
     "CREATE TABLE IF NOT EXISTS announcement_poll_invites (token_hash TEXT PRIMARY KEY,poll_id TEXT NOT NULL,installation_hash TEXT NOT NULL,created_at TEXT NOT NULL,voted_at TEXT)",
     "CREATE INDEX IF NOT EXISTS idx_poll_invites_poll ON announcement_poll_invites(poll_id)",
     "CREATE TABLE IF NOT EXISTS announcement_poll_votes (poll_id TEXT NOT NULL,invite_hash TEXT NOT NULL,option_id TEXT NOT NULL,voted_at TEXT NOT NULL,PRIMARY KEY(poll_id,invite_hash))",
+    "CREATE TABLE IF NOT EXISTS announcement_feedback_invites (token_hash TEXT PRIMARY KEY,message_id TEXT NOT NULL,installation_hash TEXT NOT NULL,created_at TEXT NOT NULL,responded_at TEXT)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_invites_message ON announcement_feedback_invites(message_id)",
+    "CREATE TABLE IF NOT EXISTS announcement_feedback_responses (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,invite_hash TEXT NOT NULL UNIQUE,body_text TEXT NOT NULL,body_html TEXT NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_responses_message ON announcement_feedback_responses(message_id,created_at)",
+    "CREATE TABLE IF NOT EXISTS announcement_feedback_attachments (id TEXT PRIMARY KEY,response_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,filename TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_attachments_response ON announcement_feedback_attachments(response_id)",
+    "CREATE TABLE IF NOT EXISTS notification_state (notification_id TEXT NOT NULL,installation_id TEXT NOT NULL,read_at TEXT,archived_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(notification_id,installation_id))",
     "CREATE TABLE IF NOT EXISTS app_notifications (id TEXT PRIMARY KEY,kind TEXT NOT NULL,zman TEXT,title TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT,target_installation_id TEXT,content_type TEXT,content_id TEXT,body_html TEXT,action_json TEXT,dedupe_key TEXT UNIQUE)",
     "CREATE TABLE IF NOT EXISTS push_config (id INTEGER PRIMARY KEY CHECK(id=1),public_key TEXT NOT NULL,private_key TEXT NOT NULL,subject TEXT NOT NULL,created_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint TEXT PRIMARY KEY,installation_id TEXT NOT NULL,zman TEXT NOT NULL,p256dh TEXT NOT NULL,auth TEXT NOT NULL,timezone TEXT NOT NULL,reminder_enabled INTEGER NOT NULL DEFAULT 0,reminder_time TEXT,israel_calendar INTEGER NOT NULL DEFAULT 0,last_reminder_local_date TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
@@ -223,7 +230,7 @@ async function audienceCountRoute(request,env,user){
 
 async function createMessage(request,env,user){
   if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});let body;try{body=await request.json()}catch(_){return json({error:'Invalid JSON'},{status:400})}
-  const kind=body?.kind==='poll'?'poll':'announcement',audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura',region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
+  const requestedKind=String(body?.kind||'announcement'),kind=['poll','feedback_request'].includes(requestedKind)?requestedKind:'announcement',audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura',region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
   if(!title)return json({error:'Title is required.'},{status:400});
   if(!permissionAllowed(user,kind,audienceType,region,chabura))return json({error:'You do not have permission for that audience.'},{status:403});
   if(audienceType==='chabura'&&!CHABURA_KEYS.has(String(region)+'\u0000'+String(chabura)))return json({error:'Unknown chabura.'},{status:400});
@@ -253,6 +260,11 @@ async function createMessage(request,env,user){
         const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),pollUrl=new URL('/poll/'+pollId,new URL(request.url).origin);pollUrl.searchParams.set('t',invite);actionUrl=pollUrl.href;actionJson=JSON.stringify({type:'poll',label:'Vote',url:actionUrl,pollId});
         await env.DB.prepare("INSERT INTO announcement_poll_invites(token_hash,poll_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,pollId,installationHash,created).run();
       }
+      else if(kind==='feedback_request'){
+        const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),feedbackUrl=new URL('/feedback/'+messageId,new URL(request.url).origin);
+        feedbackUrl.searchParams.set('t',invite);actionUrl=feedbackUrl.href;actionJson=JSON.stringify({type:'feedback_request',label:'Reply',url:actionUrl});
+        await env.DB.prepare("INSERT INTO announcement_feedback_invites(token_hash,message_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,messageId,installationHash,created).run();
+      }
       await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(notificationId,kind,zman,title,bodyText,bodyHtml,created,installationId,actionJson,'message:'+messageId+':'+installationId).run();
       const rows=pushByInstall.get(installationId)||[];
       await pushMany(env,rows,()=>({title,body:pushBody(bodyText),tag:'scp-'+notificationId,data:{notificationId,kind,zman,url:actionUrl}}));
@@ -262,9 +274,21 @@ async function createMessage(request,env,user){
 }
 
 async function listMessages(env,user){
-  const sql=user.isAdmin?"SELECT * FROM announcement_messages ORDER BY created_at DESC LIMIT 100":"SELECT * FROM announcement_messages WHERE created_by_email=? ORDER BY created_at DESC LIMIT 100";
+  const base=`SELECT m.*,
+    COALESCE((SELECT COUNT(DISTINCT s.installation_id)
+      FROM app_notifications n JOIN notification_state s ON s.notification_id=n.id
+      WHERE (n.dedupe_key='message:'||m.id OR n.dedupe_key LIKE 'message:'||m.id||':%') AND s.read_at IS NOT NULL),0) read_count,
+    COALESCE((SELECT COUNT(*) FROM announcement_feedback_responses r WHERE r.message_id=m.id),0) response_count
+    FROM announcement_messages m`;
+  const sql=user.isAdmin?base+" ORDER BY m.created_at DESC LIMIT 100":base+" WHERE m.created_by_email=? ORDER BY m.created_at DESC LIMIT 100";
   const result=user.isAdmin?await env.DB.prepare(sql).all():await env.DB.prepare(sql).bind(user.email).all();
-  return json({messages:(result.results||[]).map(row=>({id:row.id,kind:row.kind,title:row.title,audienceType:row.audience_type,audienceLabel:row.audience_type==='broadcast'?'All SCP students':(row.chabura+' · '+row.region),recipientCount:Number(row.recipient_count)||0,pushCount:Number(row.push_count)||0,pollId:row.poll_id||null,createdAt:row.created_at,createdBy:row.created_by_email}))});
+  return json({messages:(result.results||[]).map(row=>({
+    id:row.id,kind:row.kind,title:row.title,audienceType:row.audience_type,
+    audienceLabel:row.audience_type==='broadcast'?'All SCP students':(row.chabura+' · '+row.region),
+    recipientCount:Number(row.recipient_count)||0,receivedCount:Number(row.recipient_count)||0,
+    readCount:Number(row.read_count)||0,responseCount:Number(row.response_count)||0,
+    pushCount:Number(row.push_count)||0,pollId:row.poll_id||null,createdAt:row.created_at,createdBy:row.created_by_email
+  }))});
 }
 
 async function pollResults(env,user,pollId){
@@ -297,6 +321,90 @@ async function votePoll(request,env,pollId){
   return json({ok:true});
 }
 
+
+async function feedbackInviteView(env,messageId,token){
+  const tokenHash=await sha256(token||'');
+  const invite=await env.DB.prepare(`SELECT i.token_hash,i.message_id,i.responded_at,m.title,m.body_html,m.body_text
+    FROM announcement_feedback_invites i JOIN announcement_messages m ON m.id=i.message_id
+    WHERE i.token_hash=? AND i.message_id=?`).bind(tokenHash,messageId).first();
+  if(!invite)return null;
+  return{invite,tokenHash};
+}
+function feedbackResponsePage(messageId,token,data){
+  if(!data)return '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback unavailable</title><style>body{font-family:system-ui;padding:30px;color:#17243c}</style><h1>Feedback unavailable</h1><p>This feedback link is invalid or no longer available.</p>';
+  const already=!!data.invite.responded_at;
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(data.invite.title)}</title>
+  <style>body{margin:0;background:#eef3fb;color:#14213d;font-family:system-ui}.card{width:min(680px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(22,37,84,.1)}h1{margin:0 0 10px;font-size:1.35rem}.prompt{color:#4d5b70;line-height:1.55}.toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:7px;border:1px solid #dbe4f0;border-bottom:0;border-radius:12px 12px 0 0;background:#f7f9fc}.toolbar button{border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:6px 9px}.editor{min-height:160px;border:1px solid #dbe4f0;border-radius:0 0 12px 12px;padding:12px;outline:none;line-height:1.5}.editor:empty:before{content:'Write your feedback…';color:#98a5b7}.files{margin-top:12px;padding:11px;border:1px solid #dbe4f0;border-radius:12px}.files small{display:block;color:#6f7e95;margin-top:5px}.send{margin-top:13px;border:0;border-radius:10px;padding:11px 16px;background:#275bd6;color:#fff;font-weight:800}.status{margin-top:10px;color:#58667c;font-size:.86rem}</style></head>
+  <body><main class="card"><h1>${escapeHtml(data.invite.title)}</h1><div class="prompt">${data.invite.body_html||escapeHtml(data.invite.body_text||'')}</div>
+  ${already?'<p class="status"><strong>Your feedback was submitted.</strong></p>':`
+  <div style="margin-top:18px"><div class="toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="underline"><u>U</u></button><button type="button" data-cmd="insertUnorderedList">• List</button><button type="button" data-cmd="insertOrderedList">1. List</button><button type="button" id="replyLink">Link</button></div><div id="replyEditor" class="editor" contenteditable="true"></div></div>
+  <label class="files">Media attachments <input id="replyFiles" type="file" accept="image/*,audio/*,video/*" multiple><small>Up to 3 files, 10 MB each.</small></label>
+  <button id="replySend" class="send" type="button">Send feedback</button><div id="replyStatus" class="status"></div>
+  <script>
+  document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{document.execCommand(b.dataset.cmd,false,null);document.getElementById('replyEditor').focus()}));
+  document.getElementById('replyLink').addEventListener('click',()=>{const u=prompt('Link URL');if(!u)return;try{const x=new URL(u);if(!['http:','https:'].includes(x.protocol))throw 0;document.execCommand('createLink',false,x.href)}catch(_){alert('Use a valid http or https URL.')}});
+  document.getElementById('replySend').addEventListener('click',async()=>{const editor=document.getElementById('replyEditor'),status=document.getElementById('replyStatus'),button=document.getElementById('replySend'),files=[...document.getElementById('replyFiles').files];if(!editor.textContent.trim()){status.textContent='Write a response.';return}if(files.length>3){status.textContent='Choose up to 3 files.';return}const fd=new FormData();fd.append('token',${JSON.stringify(token)});fd.append('bodyHtml',editor.innerHTML);files.forEach(f=>fd.append('media',f));button.disabled=true;status.textContent='Sending…';try{const r=await fetch('/api/feedback-requests/${encodeURIComponent(messageId)}/respond',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not send');status.textContent='Feedback sent.';editor.contentEditable='false';button.remove();document.getElementById('replyFiles').disabled=true}catch(e){status.textContent=e.message;button.disabled=false}});
+  </script>`}</main></body></html>`;
+}
+function cleanFilename(value){return String(value||'attachment').replace(/[\r\n"]/g,'').replace(/[^a-zA-Z0-9._ -]/g,'_').slice(0,160)||'attachment'}
+async function submitFeedbackResponse(request,env,messageId){
+  if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});
+  const form=await request.formData(),token=String(form.get('token')||''),view=await feedbackInviteView(env,messageId,token);
+  if(!view)return json({error:'Invalid feedback invitation'},{status:403});
+  if(view.invite.responded_at)return json({error:'Feedback was already submitted.'},{status:409});
+  const bodyHtml=sanitizeRichHtml(form.get('bodyHtml')),bodyText=text(richToPlain(bodyHtml),10000);
+  if(!bodyText)return json({error:'Feedback message is required.'},{status:400});
+  const media=form.getAll('media').filter(value=>value&&typeof value==='object'&&typeof value.arrayBuffer==='function');
+  if(media.length>3)return json({error:'Choose up to 3 media files.'},{status:400});
+  let total=0;
+  for(const file of media){
+    const type=String(file.type||'').toLowerCase();
+    if(!/^(image|audio|video)\//.test(type))return json({error:'Attachments must be images, audio, or video.'},{status:400});
+    if(Number(file.size)>10*1024*1024)return json({error:'Each attachment must be 10 MB or smaller.'},{status:400});
+    total+=Number(file.size)||0;
+  }
+  if(total>20*1024*1024)return json({error:'Total attachments must be 20 MB or smaller.'},{status:400});
+  if(media.length&&!env.MEDIA)return json({error:'Media storage is not configured.'},{status:503});
+  const responseId=crypto.randomUUID(),created=nowIso(),attachmentRows=[];
+  for(const file of media){
+    const attachmentId=crypto.randomUUID(),objectKey='feedback-media/'+CURRENT_ZMAN+'/'+messageId+'/'+responseId+'/'+attachmentId;
+    await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+    attachmentRows.push({id:attachmentId,objectKey,filename:cleanFilename(file.name),contentType:file.type||'application/octet-stream',size:Number(file.size)||0});
+  }
+  const statements=[
+    env.DB.prepare("INSERT INTO announcement_feedback_responses(id,message_id,invite_hash,body_text,body_html,created_at) VALUES(?,?,?,?,?,?)").bind(responseId,messageId,view.tokenHash,bodyText,bodyHtml,created),
+    env.DB.prepare("UPDATE announcement_feedback_invites SET responded_at=? WHERE token_hash=?").bind(created,view.tokenHash),
+    ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_feedback_attachments(id,response_id,object_key,filename,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?)").bind(item.id,responseId,item.objectKey,item.filename,item.contentType,item.size,created))
+  ];
+  await runBatch(env,statements);
+  return json({ok:true,responseId});
+}
+async function feedbackResponses(env,user,messageId){
+  const message=await env.DB.prepare("SELECT id,title,created_by_email FROM announcement_messages WHERE id=? AND kind='feedback_request'").bind(messageId).first();
+  if(!message)return json({error:'Feedback request not found'},{status:404});
+  if(!user.isAdmin&&message.created_by_email!==user.email)return json({error:'Not permitted'},{status:403});
+  const rows=(await env.DB.prepare("SELECT id,body_html,body_text,created_at FROM announcement_feedback_responses WHERE message_id=? ORDER BY created_at DESC").bind(messageId).all()).results||[];
+  const result=[];
+  for(const row of rows){
+    const attachments=(await env.DB.prepare("SELECT id,filename,content_type,size_bytes FROM announcement_feedback_attachments WHERE response_id=? ORDER BY created_at").bind(row.id).all()).results||[];
+    result.push({id:row.id,bodyHtml:row.body_html,bodyText:row.body_text,createdAt:row.created_at,attachments:attachments.map(a=>({id:a.id,filename:a.filename,contentType:a.content_type,sizeBytes:Number(a.size_bytes)||0,url:'/api/feedback-media/'+a.id}))});
+  }
+  return json({messageId,title:message.title,responses:result});
+}
+async function feedbackMedia(request,env,user,attachmentId){
+  const row=await env.DB.prepare(`SELECT a.object_key,a.filename,a.content_type,m.created_by_email
+    FROM announcement_feedback_attachments a
+    JOIN announcement_feedback_responses r ON r.id=a.response_id
+    JOIN announcement_messages m ON m.id=r.message_id
+    WHERE a.id=?`).bind(attachmentId).first();
+  if(!row)return new Response('Not found',{status:404});
+  if(!user.isAdmin&&row.created_by_email!==user.email)return new Response('Forbidden',{status:403});
+  const object=await env.MEDIA?.get(row.object_key);
+  if(!object)return new Response('Not found',{status:404});
+  const headers=new Headers();headers.set('Content-Type',row.content_type||'application/octet-stream');headers.set('Content-Disposition','inline; filename="'+cleanFilename(row.filename)+'"');headers.set('Cache-Control','private, max-age=60');
+  return new Response(object.body,{headers});
+}
+
 async function listUsers(env){
   const userRows=(await env.DB.prepare("SELECT * FROM announcement_users ORDER BY display_name,email").all()).results||[],assignRows=(await env.DB.prepare("SELECT email,region,chabura FROM announcement_user_chaburos WHERE zman=? ORDER BY region,chabura").bind(CURRENT_ZMAN).all()).results||[],byEmail=new Map();
   for(const row of assignRows){if(!byEmail.has(row.email))byEmail.set(row.email,[]);byEmail.get(row.email).push({region:row.region,chabura:row.chabura})}
@@ -317,7 +425,7 @@ async function saveUser(request,env,admin){
 
 async function route(request,env){
   await setup(env);const url=new URL(request.url),path=url.pathname;
-  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:2,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:3,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
   if(path==='/api/meta'){
     const count=await env.DB.prepare("SELECT COUNT(*) n FROM announcement_users").first();
     const config=emailConfigStatus(env),adminCount=Number(count?.n||0);
@@ -339,6 +447,8 @@ async function route(request,env){
   if(path==='/api/auth/logout'&&request.method==='POST')return logout(request,env);
   if(path.startsWith('/poll/')&&request.method==='GET'){const pollId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await pollView(env,pollId,token);return html(pollPage(pollId,token,data))}
   const voteMatch=path.match(/^\/api\/polls\/([^/]+)\/vote$/);if(voteMatch&&request.method==='POST')return votePoll(request,env,decodeURIComponent(voteMatch[1]));
+  if(path.startsWith('/feedback/')&&request.method==='GET'){const messageId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await feedbackInviteView(env,messageId,token);return html(feedbackResponsePage(messageId,token,data))}
+  const feedbackSubmit=path.match(/^\/api\/feedback-requests\/([^/]+)\/respond$/);if(feedbackSubmit&&request.method==='POST')return submitFeedbackResponse(request,env,decodeURIComponent(feedbackSubmit[1]));
   const user=await requireUser(request,env);
   if(path==='/api/me'&&request.method==='GET')return json(publicUser(user));
   if(path==='/api/chaburas'&&request.method==='GET'){const list=(url.searchParams.get('all')==='1'&&user.isAdmin)?CHABURAS:CHABURAS.filter(item=>user.isAdmin||user.chaburas.some(a=>a.region===item.region&&a.chabura===item.name));return json({zman:env.CURRENT_ZMAN||CURRENT_ZMAN,chaburas:list})}
@@ -346,6 +456,8 @@ async function route(request,env){
   if(path==='/api/messages'&&request.method==='GET')return listMessages(env,user);
   if(path==='/api/messages'&&request.method==='POST')return createMessage(request,env,user);
   const resultsMatch=path.match(/^\/api\/polls\/([^/]+)\/results$/);if(resultsMatch&&request.method==='GET')return pollResults(env,user,decodeURIComponent(resultsMatch[1]));
+  const feedbackResponsesMatch=path.match(/^\/api\/feedback-requests\/([^/]+)\/responses$/);if(feedbackResponsesMatch&&request.method==='GET')return feedbackResponses(env,user,decodeURIComponent(feedbackResponsesMatch[1]));
+  const feedbackMediaMatch=path.match(/^\/api\/feedback-media\/([^/]+)$/);if(feedbackMediaMatch&&request.method==='GET')return feedbackMedia(request,env,user,decodeURIComponent(feedbackMediaMatch[1]));
   if(path==='/api/admin/users'&&request.method==='GET'){await requireAdmin(request,env);return json({users:await listUsers(env)})}
   if(path==='/api/admin/users'&&request.method==='POST'){const admin=await requireAdmin(request,env);return saveUser(request,env,admin)}
   return json({error:'Not found'},{status:404});

@@ -88,3 +88,14 @@ Deploy backward-compatible storage/API changes before a client starts depending 
 `/api/meta` may expose only non-sensitive configuration booleans/provider names. Never expose secret values or the bootstrap email address.
 
 When a provider call fails, log the provider HTTP status and sanitized response message. Do not log API keys, OTP codes, session tokens, or recipient addresses.
+
+
+## Feedback-request messages and media
+
+A `feedback_request` is a typed announcement. It uses the sender's Chabura-announcement permission (or broadcast permission for all-student sends). Each recipient gets a random invitation token and a targeted inbox row.
+
+Student replies are anonymous to the sender. Invitation URLs must never contain installation IDs.
+
+Media attachments are stored in the existing Cloudflare R2 bucket through the `MEDIA` binding under `feedback-media/<zman>/...`. Accepted files are images, audio, and video only, at most 3 files, 10 MB each, 20 MB total. Media is not publicly bucket-addressable; the admin/sender downloads through an authenticated Worker route.
+
+The Sent tab's "received" count is the intended known-installation audience saved at send time. "Read" is the number of distinct installations with server-side `notification_state.read_at` for inbox rows associated with that message. Do not describe push delivery as read receipt.

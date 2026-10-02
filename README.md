@@ -51,3 +51,12 @@ Cloudflare deploys `main` automatically.
 - Resend API failures now surface the provider HTTP status/message and are logged in Worker logs.
 
 For a Resend test sender, `EMAIL_FROM` may be set to `SCP Study <onboarding@resend.dev>`. The Worker URL/domain is unrelated to the email sender domain.
+
+
+## Release 3
+
+- Fixes Add Poll Option so a new option is always blank and not browser-autofilled from the previous option.
+- Sent messages show received and read counts from inbox state.
+- Adds Feedback request messages with anonymous rich-text student replies.
+- Adds up to three image/audio/video attachments per feedback reply, stored privately in Cloudflare R2.
+- Senders/admins can review feedback responses and attachments from Sent.

@@ -10,7 +10,8 @@
     "run_worker_first": [
       "/api/*",
       "/poll/*",
-      "/health"
+      "/health",
+      "/feedback/*"
     ]
   },
   "vars": {
@@ -24,5 +25,11 @@
       "database_id": "832e0e9e-c8b9-434f-b9ef-4ad2f1a85117"
     }
   ],
-  "keep_vars": true
+  "keep_vars": true,
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "scp-study-audio"
+    }
+  ]
 }

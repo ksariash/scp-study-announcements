@@ -82,10 +82,12 @@ async function refreshAudienceCount(){
 $('audienceSelect').addEventListener('change',refreshAudienceCount);
 $('messageType').addEventListener('change',()=>{$('pollFields').classList.toggle('hidden',$('messageType').value!=='poll');ensurePollOptions();refreshAudienceCount()});
 
-function addPollOption(value=''){
+function addPollOption(value=null){
   const row=document.createElement('div');row.className='poll-option';
-  row.innerHTML='<input maxlength="180" placeholder="Option" value="'+esc(value)+'"><button type="button" aria-label="Remove option">×</button>';
-  row.querySelector('button').addEventListener('click',()=>row.remove());$('pollOptions').appendChild(row);
+  const input=document.createElement('input');input.maxLength=180;input.placeholder='Option';input.autocomplete='off';input.name='poll-option-'+crypto.randomUUID();input.value=typeof value==='string'?value:'';
+  const remove=document.createElement('button');remove.type='button';remove.setAttribute('aria-label','Remove option');remove.textContent='×';remove.addEventListener('click',()=>row.remove());
+  row.append(input,remove);$('pollOptions').appendChild(row);
+  if(value===null){input.value='';requestAnimationFrame(()=>{input.value='';input.focus()})}
 }
 function ensurePollOptions(){if(!$('pollOptions').children.length){addPollOption();addPollOption();addPollOption();}}
 $('addPollOption').addEventListener('click',()=>addPollOption());
@@ -126,18 +128,31 @@ async function loadSent(){
     if(!data.messages.length){target.innerHTML='<p class="status">Nothing sent yet.</p>';return}
     target.innerHTML=data.messages.map(item=>{
       const poll=item.pollId?'<button class="quiet compact" data-results="'+esc(item.pollId)+'">Results</button>':'';
-      return '<article class="sent-card"><div class="sent-top"><div><h3>'+esc(item.title)+'</h3><div class="meta">'+esc(item.kind)+' · '+esc(item.audienceLabel)+' · '+new Date(item.createdAt).toLocaleString()+'</div></div>'+poll+'</div><div class="chips"><span class="chip">'+item.recipientCount+' students</span><span class="chip">'+item.pushCount+' push enabled</span></div></article>';
+      const feedback=item.kind==='feedback_request'?'<button class="quiet compact" data-feedback-responses="'+esc(item.id)+'">Responses'+(item.responseCount?' ('+item.responseCount+')':'')+'</button>':'';
+      const kindLabel=item.kind==='feedback_request'?'feedback request':item.kind;
+      return '<article class="sent-card"><div class="sent-top"><div><h3>'+esc(item.title)+'</h3><div class="meta">'+esc(kindLabel)+' · '+esc(item.audienceLabel)+' · '+new Date(item.createdAt).toLocaleString()+'</div></div><div>'+poll+feedback+'</div></div><div class="chips"><span class="chip">'+item.receivedCount+' received</span><span class="chip">'+item.readCount+' read</span><span class="chip">'+item.pushCount+' push enabled</span></div></article>';
     }).join('');
   }catch(error){target.innerHTML='<p class="status danger-text">'+esc(error.message)+'</p>'}
 }
 $('refreshSent').addEventListener('click',loadSent);
 $('sentList').addEventListener('click',async event=>{
-  const button=event.target.closest('[data-results]');if(!button)return;
+  const pollButton=event.target.closest('[data-results]');
+  const feedbackButton=event.target.closest('[data-feedback-responses]');
   try{
-    const data=await api('/api/polls/'+encodeURIComponent(button.dataset.results)+'/results');
-    const total=data.totalVotes||0;
-    $('resultsBody').innerHTML=data.options.map(item=>{const pct=total?Math.round(100*item.votes/total):0;return '<div class="result-row"><div><strong>'+esc(item.label)+'</strong><div class="result-bar"><span style="width:'+pct+'%"></span></div></div><b>'+item.votes+' · '+pct+'%</b></div>'}).join('')+'<p class="status">'+total+' vote'+(total===1?'':'s')+'</p>';
-    $('resultsDialog').showModal();
+    if(pollButton){
+      const data=await api('/api/polls/'+encodeURIComponent(pollButton.dataset.results)+'/results');
+      const total=data.totalVotes||0;
+      $('resultsBody').innerHTML=data.options.map(item=>{const pct=total?Math.round(100*item.votes/total):0;return '<div class="result-row"><div><strong>'+esc(item.label)+'</strong><div class="result-bar"><span style="width:'+pct+'%"></span></div></div><b>'+item.votes+' · '+pct+'%</b></div>'}).join('')+'<p class="status">'+total+' vote'+(total===1?'':'s')+'</p>';
+      $('resultsDialog').showModal();return;
+    }
+    if(feedbackButton){
+      const data=await api('/api/feedback-requests/'+encodeURIComponent(feedbackButton.dataset.feedbackResponses)+'/responses');
+      $('resultsBody').innerHTML=data.responses.length?data.responses.map(item=>{
+        const media=(item.attachments||[]).map(a=>'<a class="chip" href="'+esc(a.url)+'" target="_blank" rel="noopener">'+esc(a.filename)+'</a>').join('');
+        return '<article class="feedback-response-card"><div class="meta">'+new Date(item.createdAt).toLocaleString()+'</div><div class="feedback-response-body">'+(item.bodyHtml||esc(item.bodyText))+'</div>'+(media?'<div class="chips">'+media+'</div>':'')+'</article>';
+      }).join(''):'<p class="status">No responses yet.</p>';
+      $('resultsDialog').showModal();
+    }
   }catch(error){alert(error.message)}
 });
 $('closeResults').addEventListener('click',()=>$('resultsDialog').close());
