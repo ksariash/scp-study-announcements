@@ -423,18 +423,56 @@ function feedbackResponsePage(messageId,token,data){
   if(!data)return '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback unavailable</title><style>body{font-family:system-ui;padding:30px;color:#17243c}</style><h1>Feedback unavailable</h1><p>This feedback link is invalid or no longer available.</p>';
   const already=!!data.invite.responded_at;
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(data.invite.title)}</title>
-  <style>body{margin:0;background:#eef3fb;color:#14213d;font-family:system-ui}.card{width:min(680px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(22,37,84,.1)}h1{margin:0 0 10px;font-size:1.35rem}.prompt{color:#4d5b70;line-height:1.55}.toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:7px;border:1px solid #dbe4f0;border-bottom:0;border-radius:12px 12px 0 0;background:#f7f9fc}.toolbar button{border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:6px 9px}.editor{min-height:160px;border:1px solid #dbe4f0;border-radius:0 0 12px 12px;padding:12px;outline:none;line-height:1.5}.editor:empty:before{content:'Write your feedback…';color:#98a5b7}.files{margin-top:12px;padding:11px;border:1px solid #dbe4f0;border-radius:12px}.files small{display:block;color:#6f7e95;margin-top:5px}.send{margin-top:13px;border:0;border-radius:10px;padding:11px 16px;background:#275bd6;color:#fff;font-weight:800}.status{margin-top:10px;color:#58667c;font-size:.86rem}</style></head>
+  <style>
+    body{margin:0;background:#eef3fb;color:#14213d;font-family:system-ui}
+    .card{width:min(680px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(22,37,84,.1);box-sizing:border-box}
+    h1{margin:0 0 10px;font-size:1.35rem}.prompt{color:#4d5b70;line-height:1.55}
+    .contact-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0 12px}.contact-fields label:first-child{grid-column:1/-1}
+    .contact-fields label{display:grid;gap:5px;color:#536177;font-size:.82rem;font-weight:700}.contact-fields input{width:100%;box-sizing:border-box;border:1px solid #dbe4f0;border-radius:10px;padding:10px 11px;font:inherit;color:#14213d;background:#fff}
+    .contact-note{grid-column:1/-1;margin:0;color:#75839a;font-size:.76rem;font-weight:500}
+    .toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:7px;border:1px solid #dbe4f0;border-bottom:0;border-radius:12px 12px 0 0;background:#f7f9fc}.toolbar button{border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:6px 9px}
+    .editor{min-height:160px;border:1px solid #dbe4f0;border-radius:0 0 12px 12px;padding:12px;outline:none;line-height:1.5}.editor:empty:before{content:'Write your feedback…';color:#98a5b7}
+    .files{display:block;margin-top:12px;padding:11px;border:1px solid #dbe4f0;border-radius:12px}.files small{display:block;color:#6f7e95;margin-top:5px}
+    .send{margin-top:13px;border:0;border-radius:10px;padding:11px 16px;background:#275bd6;color:#fff;font-weight:800}.status{margin-top:10px;color:#58667c;font-size:.86rem}
+    @media(max-width:560px){.card{margin:12px auto;padding:16px}.contact-fields{grid-template-columns:1fr}.contact-fields label:first-child,.contact-note{grid-column:auto}}
+  </style></head>
   <body><main class="card"><h1>${escapeHtml(data.invite.title)}</h1><div class="prompt">${data.invite.body_html||escapeHtml(data.invite.body_text||'')}</div>
   ${already?'<p class="status"><strong>Your feedback was submitted.</strong></p>':`
-  <div style="margin-top:18px"><div class="toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="underline"><u>U</u></button><button type="button" data-cmd="insertUnorderedList">• List</button><button type="button" data-cmd="insertOrderedList">1. List</button><button type="button" id="replyLink">Link</button></div><div id="replyEditor" class="editor" contenteditable="true"></div></div>
+  <div class="contact-fields">
+    <label>Name (optional)<input id="replyName" type="text" autocomplete="name" maxlength="120"></label>
+    <label>Email (optional)<input id="replyEmail" type="email" autocomplete="email" maxlength="320"></label>
+    <label>Phone (optional)<input id="replyPhone" type="tel" autocomplete="tel" maxlength="40"></label>
+    <p class="contact-note">Add contact information only if you would like an instructor to reply to you directly.</p>
+  </div>
+  <div><div class="toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="underline"><u>U</u></button><button type="button" data-cmd="insertUnorderedList">• List</button><button type="button" data-cmd="insertOrderedList">1. List</button><button type="button" id="replyLink">Link</button></div><div id="replyEditor" class="editor" contenteditable="true"></div></div>
   <label class="files">Media attachments <input id="replyFiles" type="file" accept="image/*,audio/*,video/*" multiple><small>Up to 3 files, 10 MB each.</small></label>
   <button id="replySend" class="send" type="button">Send feedback</button><div id="replyStatus" class="status"></div>
   <script>
   document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{document.execCommand(b.dataset.cmd,false,null);document.getElementById('replyEditor').focus()}));
   document.getElementById('replyLink').addEventListener('click',()=>{const u=prompt('Link URL');if(!u)return;try{const x=new URL(u);if(!['http:','https:'].includes(x.protocol))throw 0;document.execCommand('createLink',false,x.href)}catch(_){alert('Use a valid http or https URL.')}});
-  document.getElementById('replySend').addEventListener('click',async()=>{const editor=document.getElementById('replyEditor'),status=document.getElementById('replyStatus'),button=document.getElementById('replySend'),files=[...document.getElementById('replyFiles').files];if(!editor.textContent.trim()){status.textContent='Write a response.';return}if(files.length>3){status.textContent='Choose up to 3 files.';return}const fd=new FormData();fd.append('token',${JSON.stringify(token)});fd.append('bodyHtml',editor.innerHTML);files.forEach(f=>fd.append('media',f));button.disabled=true;status.textContent='Sending…';try{const r=await fetch('/api/feedback-requests/${encodeURIComponent(messageId)}/respond',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not send');status.textContent='Feedback sent.';editor.contentEditable='false';button.remove();document.getElementById('replyFiles').disabled=true}catch(e){status.textContent=e.message;button.disabled=false}});
+  document.getElementById('replySend').addEventListener('click',async()=>{
+    const editor=document.getElementById('replyEditor'),status=document.getElementById('replyStatus'),button=document.getElementById('replySend'),files=[...document.getElementById('replyFiles').files];
+    if(!editor.textContent.trim()){status.textContent='Write a response.';return}
+    if(files.length>3){status.textContent='Choose up to 3 files.';return}
+    const fd=new FormData();
+    fd.append('token',${JSON.stringify(token)});
+    fd.append('bodyHtml',editor.innerHTML);
+    fd.append('name',document.getElementById('replyName').value.trim());
+    fd.append('email',document.getElementById('replyEmail').value.trim());
+    fd.append('phone',document.getElementById('replyPhone').value.trim());
+    files.forEach(f=>fd.append('media',f));
+    button.disabled=true;status.textContent='Sending…';
+    try{
+      const r=await fetch('/api/feedback-requests/${encodeURIComponent(messageId)}/respond',{method:'POST',body:fd});
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not send');
+      status.textContent='Feedback sent.';editor.contentEditable='false';button.remove();
+      document.getElementById('replyFiles').disabled=true;
+      ['replyName','replyEmail','replyPhone'].forEach(id=>document.getElementById(id).disabled=true);
+    }catch(e){status.textContent=e.message;button.disabled=false}
+  });
   </script>`}</main></body></html>`;
 }
+
 function cleanFilename(value){return String(value||'attachment').replace(/[\r\n"]/g,'').replace(/[^a-zA-Z0-9._ -]/g,'_').slice(0,160)||'attachment'}
 async function submitFeedbackResponse(request,env,messageId){
   if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});
