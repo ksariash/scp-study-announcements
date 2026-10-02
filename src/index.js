@@ -527,14 +527,34 @@ async function feedbackResponses(env,user,messageId){
   const message=await env.DB.prepare("SELECT id,title,created_by_email FROM announcement_messages WHERE id=? AND kind='feedback_request'").bind(messageId).first();
   if(!message)return json({error:'Feedback request not found'},{status:404});
   if(!user.isAdmin&&message.created_by_email!==user.email)return json({error:'Not permitted'},{status:403});
-  const rows=(await env.DB.prepare("SELECT id,body_html,body_text,created_at FROM announcement_feedback_responses WHERE message_id=? ORDER BY created_at DESC").bind(messageId).all()).results||[];
+  const rows=(await env.DB.prepare("SELECT id,body_html,body_text,responder_name,responder_email,responder_phone,created_at FROM announcement_feedback_responses WHERE message_id=? ORDER BY created_at DESC").bind(messageId).all()).results||[];
   const result=[];
   for(const row of rows){
     const attachments=(await env.DB.prepare("SELECT id,filename,content_type,size_bytes FROM announcement_feedback_attachments WHERE response_id=? ORDER BY created_at").bind(row.id).all()).results||[];
-    result.push({id:row.id,bodyHtml:row.body_html,bodyText:row.body_text,createdAt:row.created_at,attachments:attachments.map(a=>({id:a.id,filename:a.filename,contentType:a.content_type,sizeBytes:Number(a.size_bytes)||0,url:'/api/feedback-media/'+a.id}))});
+    result.push({
+      id:row.id,bodyHtml:row.body_html,bodyText:row.body_text,createdAt:row.created_at,
+      name:row.responder_name||null,email:row.responder_email||null,phone:row.responder_phone||null,
+      attachments:attachments.map(a=>({id:a.id,filename:a.filename,contentType:a.content_type,sizeBytes:Number(a.size_bytes)||0,url:'/api/feedback-media/'+a.id}))
+    });
   }
   return json({messageId,title:message.title,responses:result});
 }
+async function messageMedia(request,env,attachmentId){
+  const url=new URL(request.url),token=String(url.searchParams.get('t')||'');
+  if(!token)return new Response('Not found',{status:404});
+  const tokenHash=await sha256(token);
+  const row=await env.DB.prepare("SELECT object_key,filename,content_type,access_token_hash FROM announcement_message_attachments WHERE id=?").bind(attachmentId).first();
+  if(!row||row.access_token_hash!==tokenHash)return new Response('Not found',{status:404});
+  const object=await env.MEDIA?.get(row.object_key);
+  if(!object)return new Response('Not found',{status:404});
+  const headers=new Headers();
+  headers.set('Content-Type',row.content_type||'application/octet-stream');
+  headers.set('Content-Disposition','inline; filename="'+cleanFilename(row.filename)+'"');
+  headers.set('Cache-Control','private, max-age=300');
+  headers.set('X-Robots-Tag','noindex, nofollow');
+  return new Response(object.body,{headers});
+}
+
 async function feedbackMedia(request,env,user,attachmentId){
   const row=await env.DB.prepare(`SELECT a.object_key,a.filename,a.content_type,m.created_by_email
     FROM announcement_feedback_attachments a
