@@ -363,15 +363,19 @@ async function listMessages(env,user){
     COALESCE((SELECT COUNT(DISTINCT s.installation_id)
       FROM app_notifications n JOIN notification_state s ON s.notification_id=n.id
       WHERE (n.dedupe_key='message:'||m.id OR n.dedupe_key LIKE 'message:'||m.id||':%') AND s.read_at IS NOT NULL),0) read_count,
-    COALESCE((SELECT COUNT(*) FROM announcement_feedback_responses r WHERE r.message_id=m.id),0) response_count
+    COALESCE((SELECT COUNT(*) FROM announcement_feedback_responses r WHERE r.message_id=m.id),0) response_count,
+    COALESCE((SELECT COUNT(*) FROM announcement_message_attachments a WHERE a.message_id=m.id),0) attachment_count
     FROM announcement_messages m`;
-  const sql=user.isAdmin?base+" ORDER BY m.created_at DESC LIMIT 100":base+" WHERE m.created_by_email=? ORDER BY m.created_at DESC LIMIT 100";
+  const sql=user.isAdmin
+    ? base+" ORDER BY m.created_at DESC"
+    : base+" WHERE m.created_by_email=? ORDER BY m.created_at DESC LIMIT 100";
   const result=user.isAdmin?await env.DB.prepare(sql).all():await env.DB.prepare(sql).bind(user.email).all();
   return json({messages:(result.results||[]).map(row=>({
     id:row.id,kind:row.kind,title:row.title,audienceType:row.audience_type,
     audienceLabel:row.audience_type==='broadcast'?'All SCP students':(row.chabura+' · '+row.region),
     recipientCount:Number(row.recipient_count)||0,receivedCount:Number(row.recipient_count)||0,
     readCount:Number(row.read_count)||0,responseCount:Number(row.response_count)||0,
+    attachmentCount:Number(row.attachment_count)||0,
     pushCount:Number(row.push_count)||0,pollId:row.poll_id||null,createdAt:row.created_at,createdBy:row.created_by_email
   }))});
 }
