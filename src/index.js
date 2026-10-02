@@ -82,10 +82,12 @@ async function ensureSchema(env){
     "CREATE TABLE IF NOT EXISTS announcement_poll_votes (poll_id TEXT NOT NULL,invite_hash TEXT NOT NULL,option_id TEXT NOT NULL,voted_at TEXT NOT NULL,PRIMARY KEY(poll_id,invite_hash))",
     "CREATE TABLE IF NOT EXISTS announcement_feedback_invites (token_hash TEXT PRIMARY KEY,message_id TEXT NOT NULL,installation_hash TEXT NOT NULL,created_at TEXT NOT NULL,responded_at TEXT)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_invites_message ON announcement_feedback_invites(message_id)",
-    "CREATE TABLE IF NOT EXISTS announcement_feedback_responses (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,invite_hash TEXT NOT NULL UNIQUE,body_text TEXT NOT NULL,body_html TEXT NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS announcement_feedback_responses (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,invite_hash TEXT NOT NULL UNIQUE,body_text TEXT NOT NULL,body_html TEXT NOT NULL,responder_name TEXT,responder_email TEXT,responder_phone TEXT,created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_responses_message ON announcement_feedback_responses(message_id,created_at)",
     "CREATE TABLE IF NOT EXISTS announcement_feedback_attachments (id TEXT PRIMARY KEY,response_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,filename TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL,created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_attachments_response ON announcement_feedback_attachments(response_id)",
+    "CREATE TABLE IF NOT EXISTS announcement_message_attachments (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,filename TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL,access_token_hash TEXT NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON announcement_message_attachments(message_id,created_at)",
     "CREATE TABLE IF NOT EXISTS notification_state (notification_id TEXT NOT NULL,installation_id TEXT NOT NULL,read_at TEXT,archived_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(notification_id,installation_id))",
     "CREATE TABLE IF NOT EXISTS app_notifications (id TEXT PRIMARY KEY,kind TEXT NOT NULL,zman TEXT,title TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT,target_installation_id TEXT,content_type TEXT,content_id TEXT,body_html TEXT,action_json TEXT,dedupe_key TEXT UNIQUE)",
     "CREATE TABLE IF NOT EXISTS push_config (id INTEGER PRIMARY KEY CHECK(id=1),public_key TEXT NOT NULL,private_key TEXT NOT NULL,subject TEXT NOT NULL,created_at TEXT NOT NULL)",
@@ -93,6 +95,10 @@ async function ensureSchema(env){
   ];
   for(const statement of sql)await env.DB.prepare(statement).run();
   try{await env.DB.prepare("ALTER TABLE app_notifications ADD COLUMN body_html TEXT").run()}catch(error){if(!/duplicate column/i.test(String(error?.message||error)))throw error}
+  for(const column of ["responder_name TEXT","responder_email TEXT","responder_phone TEXT"]){
+    try{await env.DB.prepare("ALTER TABLE announcement_feedback_responses ADD COLUMN "+column).run()}
+    catch(error){if(!/duplicate column/i.test(String(error?.message||error)))throw error}
+  }
   schemaReady=true;
 }
 async function configSecret(env,key){
