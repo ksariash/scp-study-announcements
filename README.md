@@ -41,3 +41,13 @@ npm run build
 ```
 
 Cloudflare deploys `main` automatically.
+
+
+## Release 2 — email setup diagnostics
+
+- Sets `keep_vars: true` so dashboard-created plaintext variables survive future Git/Wrangler deployments.
+- `/api/meta` now reports non-sensitive booleans for bootstrap admin, `EMAIL_FROM`, Resend, and Cloudflare Email binding configuration.
+- Login displays missing email configuration instead of silently suggesting a code was sent.
+- Resend API failures now surface the provider HTTP status/message and are logged in Worker logs.
+
+For a Resend test sender, `EMAIL_FROM` may be set to `SCP Study <onboarding@resend.dev>`. The Worker URL/domain is unrelated to the email sender domain.

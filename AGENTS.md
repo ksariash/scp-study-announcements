@@ -79,3 +79,12 @@ Changes to notification storage or rendering may require coordinated releases in
 - `scp-study`
 
 Deploy backward-compatible storage/API changes before a client starts depending on them.
+
+
+## Cloudflare variable persistence and diagnostics
+
+`keep_vars` must remain enabled. Operators configure `BOOTSTRAP_ADMIN_EMAIL` and `EMAIL_FROM` in the Cloudflare dashboard, so Git/Wrangler deploys must not erase dashboard variables.
+
+`/api/meta` may expose only non-sensitive configuration booleans/provider names. Never expose secret values or the bootstrap email address.
+
+When a provider call fails, log the provider HTTP status and sanitized response message. Do not log API keys, OTP codes, session tokens, or recipient addresses.

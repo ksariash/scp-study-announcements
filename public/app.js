@@ -35,7 +35,8 @@ async function boot(){
     try{
       const meta=await api('/api/meta');
       if(meta.setupRequired)showStatus('loginStatus','Set BOOTSTRAP_ADMIN_EMAIL in the Worker before the first sign in.');
-      else if(!meta.emailConfigured)showStatus('loginStatus','Email delivery is not configured yet.');
+      else if(!meta.emailConfigured)showStatus('loginStatus','Email setup is incomplete: '+(meta.missing||[]).join(', ')+'.');
+      else if(!meta.adminAccountExists)showStatus('loginStatus','Email is configured; the bootstrap administrator has not been created yet. Reload once and try again.');
     }catch(_){}
   }
 }

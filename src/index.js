@@ -19,6 +19,23 @@ async function hmacHex(key,value){const cryptoKey=await crypto.subtle.importKey(
 function cookies(request){const out={};for(const part of (request.headers.get('Cookie')||'').split(';')){const i=part.indexOf('=');if(i>0)out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim())}return out}
 function cookieHeader(token,maxAge){return SESSION_COOKIE+'='+encodeURIComponent(token||'')+'; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age='+maxAge}
 function sameOrigin(request){const origin=request.headers.get('Origin');return !origin||origin===new URL(request.url).origin}
+function emailConfigStatus(env){
+  const bootstrapConfigured=!!email(env.BOOTSTRAP_ADMIN_EMAIL);
+  const emailFromConfigured=!!text(env.EMAIL_FROM,320);
+  const resendConfigured=!!text(env.RESEND_API_KEY,500);
+  const emailBindingConfigured=!!(env.EMAIL&&typeof env.EMAIL.send==='function');
+  const provider=emailBindingConfigured?'cloudflare-email':(resendConfigured?'resend':null);
+  const missing=[];
+  if(!emailFromConfigured)missing.push('EMAIL_FROM');
+  if(!provider)missing.push('RESEND_API_KEY or EMAIL binding');
+  return{bootstrapConfigured,emailFromConfigured,resendConfigured,emailBindingConfigured,provider,emailConfigured:emailFromConfigured&&!!provider,missing};
+}
+function resendErrorMessage(raw,status){
+  try{
+    const parsed=JSON.parse(raw);
+    return text(parsed?.message||parsed?.error||parsed?.name,500)||('HTTP '+status);
+  }catch(_){return text(raw,500)||('HTTP '+status)}
+}
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function safeHttpUrl(value){try{const u=new URL(String(value));return ['http:','https:'].includes(u.protocol)?u.href:null}catch(_){return null}}
 
@@ -96,19 +113,26 @@ async function requireUser(request,env){const user=await sessionUser(request,env
 async function requireAdmin(request,env){const user=await requireUser(request,env);if(!user.isAdmin)throw Object.assign(new Error('Administrator access required'),{status:403});return user}
 
 async function sendEmail(env,{to,subject,textBody,htmlBody}){
-  const from=text(env.EMAIL_FROM,320);if(!from)throw new Error('EMAIL_FROM is not configured');
-  if(env.EMAIL&&typeof env.EMAIL.send==='function'){await env.EMAIL.send({to,from,subject,text:textBody,html:htmlBody});return}
-  if(env.RESEND_API_KEY){
-    const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from,to:[to],subject,text:textBody,html:htmlBody})});
-    if(!response.ok)throw new Error('Email provider rejected the message');return;
+  const config=emailConfigStatus(env),from=text(env.EMAIL_FROM,320);
+  if(!config.emailConfigured)throw new Error('Email delivery is not configured: missing '+config.missing.join(', '));
+  if(config.emailBindingConfigured){
+    try{await env.EMAIL.send({to,from,subject,text:textBody,html:htmlBody});return}
+    catch(error){console.error('Cloudflare Email Service send failed',{message:String(error?.message||error)});throw error}
   }
-  throw new Error('Email delivery is not configured');
+  const response=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from,to:[to],subject,text:textBody,html:htmlBody})});
+  if(!response.ok){
+    const raw=await response.text(),detail=resendErrorMessage(raw,response.status);
+    console.error('Resend send failed',{status:response.status,detail});
+    throw new Error('Resend rejected the email ('+response.status+'): '+detail);
+  }
 }
 async function sendOtp(env,to,code){await sendEmail(env,{to,subject:'Your SCP Announcements sign-in code',textBody:'Your verification code is '+code+'. It expires in '+OTP_MINUTES+' minutes.',htmlBody:'<p>Your SCP Announcements verification code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">'+code+'</p><p>It expires in '+OTP_MINUTES+' minutes.</p>'})}
 async function sendInvite(env,to,origin){await sendEmail(env,{to,subject:'You can now send SCP Study messages',textBody:'Your SCP Study Announcements account is ready. Sign in at '+origin+' using the verification code sent to your email.',htmlBody:'<p>Your SCP Study Announcements account is ready.</p><p><a href="'+escapeHtml(origin)+'">Open SCP Announcements</a> and sign in with the verification code sent to your email.</p>'})}
 
 async function requestCode(request,env){
   if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});let body;try{body=await request.json()}catch(_){return json({error:'Invalid JSON'},{status:400})}
+  const config=emailConfigStatus(env);
+  if(!config.emailConfigured)return json({error:'Email delivery is not configured: missing '+config.missing.join(', ')},{status:503});
   const addr=email(body?.email);if(!addr)return json({ok:true});
   const user=await env.DB.prepare("SELECT active FROM announcement_users WHERE email=?").bind(addr).first();if(!user?.active)return json({ok:true});
   const existing=await env.DB.prepare("SELECT requested_at FROM announcement_otp_codes WHERE email=?").bind(addr).first();
@@ -293,10 +317,22 @@ async function saveUser(request,env,admin){
 
 async function route(request,env){
   await setup(env);const url=new URL(request.url),path=url.pathname;
-  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:1,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:2,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
   if(path==='/api/meta'){
     const count=await env.DB.prepare("SELECT COUNT(*) n FROM announcement_users").first();
-    return json({setupRequired:Number(count?.n||0)===0&&!email(env.BOOTSTRAP_ADMIN_EMAIL),emailConfigured:!!(text(env.EMAIL_FROM,320)&&(env.EMAIL||env.RESEND_API_KEY)),zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+    const config=emailConfigStatus(env),adminCount=Number(count?.n||0);
+    return json({
+      setupRequired:adminCount===0&&!config.bootstrapConfigured,
+      bootstrapConfigured:config.bootstrapConfigured,
+      adminAccountExists:adminCount>0,
+      emailFromConfigured:config.emailFromConfigured,
+      resendConfigured:config.resendConfigured,
+      emailBindingConfigured:config.emailBindingConfigured,
+      emailConfigured:config.emailConfigured,
+      provider:config.provider,
+      missing:config.missing,
+      zman:env.CURRENT_ZMAN||CURRENT_ZMAN
+    });
   }
   if(path==='/api/auth/request-code'&&request.method==='POST')return requestCode(request,env);
   if(path==='/api/auth/verify'&&request.method==='POST')return verifyCode(request,env);
