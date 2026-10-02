@@ -235,48 +235,127 @@ async function audienceCountRoute(request,env,user){
 }
 
 async function createMessage(request,env,user){
-  if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});let body;try{body=await request.json()}catch(_){return json({error:'Invalid JSON'},{status:400})}
-  const requestedKind=String(body?.kind||'announcement'),kind=['poll','feedback_request'].includes(requestedKind)?requestedKind:'announcement',audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura',region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
+  if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});
+
+  let body={},media=[];
+  const contentType=String(request.headers.get('Content-Type')||'').toLowerCase();
+  try{
+    if(contentType.includes('multipart/form-data')){
+      const form=await request.formData();
+      body=JSON.parse(String(form.get('payload')||'{}'));
+      media=form.getAll('media').filter(value=>value&&typeof value==='object'&&typeof value.arrayBuffer==='function');
+    }else{
+      body=await request.json();
+    }
+  }catch(_){return json({error:'Invalid message payload'},{status:400})}
+
+  const requestedKind=String(body?.kind||'announcement');
+  const kind=['poll','feedback_request'].includes(requestedKind)?requestedKind:'announcement';
+  const audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura';
+  const region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
   if(!title)return json({error:'Title is required.'},{status:400});
   if(!permissionAllowed(user,kind,audienceType,region,chabura))return json({error:'You do not have permission for that audience.'},{status:403});
   if(audienceType==='chabura'&&!CHABURA_KEYS.has(String(region)+'\u0000'+String(chabura)))return json({error:'Unknown chabura.'},{status:400});
-  const bodyHtml=sanitizeRichHtml(body?.bodyHtml),bodyText=text(richToPlain(bodyHtml),5000);if(!bodyText)return json({error:'Message body is required.'},{status:400});
+
+  const sanitizedBody=sanitizeRichHtml(body?.bodyHtml);
+  const originalBodyText=text(richToPlain(sanitizedBody),5000);
+  if(!originalBodyText)return json({error:'Message body is required.'},{status:400});
+
   const pollOptions=Array.isArray(body?.pollOptions)?[...new Set(body.pollOptions.map(item=>text(item,180)).filter(Boolean))].slice(0,8):[];
   if(kind==='poll'&&pollOptions.length<2)return json({error:'Polls need at least two options.'},{status:400});
-  const count=await audienceCount(env,audienceType,region,chabura,zman),messageId=crypto.randomUUID(),pollId=kind==='poll'?crypto.randomUUID():null,created=nowIso();
-  const audienceLabel=audienceType==='broadcast'?'All SCP students':chabura+' · '+region;
-  const messageStmt=env.DB.prepare("INSERT INTO announcement_messages(id,created_by_email,kind,audience_type,zman,region,chabura,title,body_text,body_html,poll_id,recipient_count,push_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(messageId,user.email,kind,audienceType,audienceType==='broadcast'?null:zman,region,chabura,title,bodyText,bodyHtml,pollId,count.students,count.pushEnabled,created);
-  const statements=[messageStmt];
-  if(pollId){
-    statements.push(env.DB.prepare("INSERT INTO announcement_polls(id,message_id,title,body_html,created_by_email,created_at) VALUES(?,?,?,?,?,?)").bind(pollId,messageId,title,bodyHtml,user.email,created));
-    pollOptions.forEach((label,index)=>statements.push(env.DB.prepare("INSERT INTO announcement_poll_options(poll_id,option_id,label,sort_order) VALUES(?,?,?,?)").bind(pollId,crypto.randomUUID(),label,index)));
-  }
-  await runBatch(env,statements);
 
-  const studyUrl=text(env.STUDY_APP_URL,500)||'https://scp-study.ksariash.workers.dev';
-  if(kind==='announcement'&&audienceType==='broadcast'){
-    const notificationId=crypto.randomUUID();
-    await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?, 'announcement',NULL,?,?,?,?,NULL,NULL,?)").bind(notificationId,title,bodyText,bodyHtml,created,'message:'+messageId).run();
-    await pushMany(env,count.push,()=>({title,body:pushBody(bodyText),tag:'scp-'+notificationId,data:{notificationId,kind:'announcement',zman:null,url:studyUrl+'/?notifications=1'}}));
-  }else{
-    const pushByInstall=new Map();for(const row of count.push){const id=String(row.installation_id);if(!pushByInstall.has(id))pushByInstall.set(id,[]);pushByInstall.get(id).push(row)}
-    for(const installationId of count.ids){
-      const notificationId=crypto.randomUUID();let actionJson=null,actionUrl=studyUrl+'/?notifications=1';
-      if(pollId){
-        const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),pollUrl=new URL('/poll/'+pollId,new URL(request.url).origin);pollUrl.searchParams.set('t',invite);actionUrl=pollUrl.href;actionJson=JSON.stringify({type:'poll',label:'Vote',url:actionUrl,pollId});
-        await env.DB.prepare("INSERT INTO announcement_poll_invites(token_hash,poll_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,pollId,installationHash,created).run();
-      }
-      else if(kind==='feedback_request'){
-        const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),feedbackUrl=new URL('/feedback/'+messageId,new URL(request.url).origin);
-        feedbackUrl.searchParams.set('t',invite);actionUrl=feedbackUrl.href;actionJson=JSON.stringify({type:'feedback_request',label:'Reply',url:actionUrl});
-        await env.DB.prepare("INSERT INTO announcement_feedback_invites(token_hash,message_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,messageId,installationHash,created).run();
-      }
-      await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(notificationId,kind,zman,title,bodyText,bodyHtml,created,installationId,actionJson,'message:'+messageId+':'+installationId).run();
-      const rows=pushByInstall.get(installationId)||[];
-      await pushMany(env,rows,()=>({title,body:pushBody(bodyText),tag:'scp-'+notificationId,data:{notificationId,kind,zman,url:actionUrl}}));
-    }
+  if(media.length>3)return json({error:'Choose up to 3 media files.'},{status:400});
+  let mediaTotal=0;
+  for(const file of media){
+    const type=String(file.type||'').toLowerCase();
+    if(!/^(image|audio|video)\//.test(type))return json({error:'Attachments must be images, audio, or video.'},{status:400});
+    if(Number(file.size)>10*1024*1024)return json({error:'Each attachment must be 10 MB or smaller.'},{status:400});
+    mediaTotal+=Number(file.size)||0;
   }
-  return json({ok:true,messageId,pollId,students:count.students,pushEnabled:count.pushEnabled,audienceLabel});
+  if(mediaTotal>20*1024*1024)return json({error:'Total attachments must be 20 MB or smaller.'},{status:400});
+  if(media.length&&!env.MEDIA)return json({error:'Media storage is not configured.'},{status:503});
+
+  const count=await audienceCount(env,audienceType,region,chabura,zman);
+  const messageId=crypto.randomUUID(),pollId=kind==='poll'?crypto.randomUUID():null,created=nowIso();
+  const audienceLabel=audienceType==='broadcast'?'All SCP students':chabura+' · '+region;
+  const attachmentRows=[];
+
+  try{
+    for(const file of media){
+      const attachmentId=crypto.randomUUID(),accessToken=randomToken(24),accessTokenHash=await sha256(accessToken);
+      const objectKey='message-media/'+CURRENT_ZMAN+'/'+messageId+'/'+attachmentId;
+      const filename=cleanFilename(file.name);
+      await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+      const mediaUrl=new URL('/message-media/'+attachmentId,new URL(request.url).origin);
+      mediaUrl.searchParams.set('t',accessToken);
+      attachmentRows.push({
+        id:attachmentId,objectKey,filename,contentType:file.type||'application/octet-stream',
+        size:Number(file.size)||0,accessTokenHash,url:mediaUrl.href
+      });
+    }
+
+    const attachmentHtml=attachmentRows.length
+      ? '<p><strong>Attachments</strong></p><ul>'+attachmentRows.map(item=>'<li><a href="'+escapeHtml(item.url)+'" target="_blank" rel="noopener">'+escapeHtml(item.filename)+'</a></li>').join('')+'</ul>'
+      : '';
+    const bodyHtml=sanitizedBody+attachmentHtml;
+    const bodyText=text(originalBodyText+(attachmentRows.length?'\n\nAttachments: '+attachmentRows.map(item=>item.filename).join(', '):''),5000);
+
+    const messageStmt=env.DB.prepare("INSERT INTO announcement_messages(id,created_by_email,kind,audience_type,zman,region,chabura,title,body_text,body_html,poll_id,recipient_count,push_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(messageId,user.email,kind,audienceType,audienceType==='broadcast'?null:zman,region,chabura,title,bodyText,bodyHtml,pollId,count.students,count.pushEnabled,created);
+    const statements=[messageStmt,
+      ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_message_attachments(id,message_id,object_key,filename,content_type,size_bytes,access_token_hash,created_at) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(item.id,messageId,item.objectKey,item.filename,item.contentType,item.size,item.accessTokenHash,created))
+    ];
+    if(pollId){
+      statements.push(env.DB.prepare("INSERT INTO announcement_polls(id,message_id,title,body_html,created_by_email,created_at) VALUES(?,?,?,?,?,?)").bind(pollId,messageId,title,bodyHtml,user.email,created));
+      pollOptions.forEach((label,index)=>statements.push(env.DB.prepare("INSERT INTO announcement_poll_options(poll_id,option_id,label,sort_order) VALUES(?,?,?,?)").bind(pollId,crypto.randomUUID(),label,index)));
+    }
+    await runBatch(env,statements);
+
+    const studyUrl=text(env.STUDY_APP_URL,500)||'https://scp-study.ksariash.workers.dev';
+    if(kind==='announcement'&&audienceType==='broadcast'){
+      const notificationId=crypto.randomUUID();
+      await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?, 'announcement',NULL,?,?,?,?,NULL,NULL,?)")
+        .bind(notificationId,title,bodyText,bodyHtml,created,'message:'+messageId).run();
+      await pushMany(env,count.push,()=>({title,body:pushBody(originalBodyText),tag:'scp-'+notificationId,data:{notificationId,kind:'announcement',zman:null,url:studyUrl+'/?notifications=1'}}));
+    }else{
+      const pushByInstall=new Map();
+      for(const row of count.push){
+        const id=String(row.installation_id);
+        if(!pushByInstall.has(id))pushByInstall.set(id,[]);
+        pushByInstall.get(id).push(row);
+      }
+      for(const installationId of count.ids){
+        const notificationId=crypto.randomUUID();
+        let actionJson=null,actionUrl=studyUrl+'/?notifications=1';
+        if(pollId){
+          const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId);
+          const pollUrl=new URL('/poll/'+pollId,new URL(request.url).origin);
+          pollUrl.searchParams.set('t',invite);
+          actionUrl=pollUrl.href;
+          actionJson=JSON.stringify({type:'poll',label:'Vote',url:actionUrl,pollId});
+          await env.DB.prepare("INSERT INTO announcement_poll_invites(token_hash,poll_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,pollId,installationHash,created).run();
+        }else if(kind==='feedback_request'){
+          const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId);
+          const feedbackUrl=new URL('/feedback/'+messageId,new URL(request.url).origin);
+          feedbackUrl.searchParams.set('t',invite);
+          actionUrl=feedbackUrl.href;
+          actionJson=JSON.stringify({type:'feedback_request',label:'Reply',url:actionUrl});
+          await env.DB.prepare("INSERT INTO announcement_feedback_invites(token_hash,message_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,messageId,installationHash,created).run();
+        }
+        await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?)")
+          .bind(notificationId,kind,zman,title,bodyText,bodyHtml,created,installationId,actionJson,'message:'+messageId+':'+installationId).run();
+        const rows=pushByInstall.get(installationId)||[];
+        await pushMany(env,rows,()=>({title,body:pushBody(originalBodyText),tag:'scp-'+notificationId,data:{notificationId,kind,zman,url:actionUrl}}));
+      }
+    }
+    return json({ok:true,messageId,pollId,students:count.students,pushEnabled:count.pushEnabled,audienceLabel,attachments:attachmentRows.length});
+  }catch(error){
+    if(env.MEDIA){
+      await Promise.allSettled(attachmentRows.map(item=>env.MEDIA.delete(item.objectKey)));
+    }
+    throw error;
+  }
 }
 
 async function listMessages(env,user){
