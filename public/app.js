@@ -3,7 +3,10 @@ let me=null, chaburas=[], users=[], pendingEmail='', pendingSend=null;
 
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function api(path,options={}){
-  const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});
+  const isForm=typeof FormData!=='undefined'&&options.body instanceof FormData;
+  const headers={...(options.headers||{})};
+  if(!isForm&&!headers['Content-Type'])headers['Content-Type']='application/json';
+  const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...options,headers});
   let data={}; try{data=await response.json();}catch(_){}
   if(!response.ok){const error=new Error(data.error||('Request failed ('+response.status+')'));error.status=response.status;throw error}
   return data;
@@ -98,13 +101,32 @@ function composePayload(){
   return{...audience,kind,title,bodyHtml,pollOptions:kind==='poll'?options:[]};
 }
 async function doSend(){
-  const payload=composePayload();showStatus('composeStatus','Sending…');$('sendBtn').disabled=true;
+  const payload=composePayload(),files=[...($('messageMedia')?.files||[])];
+  if(files.length>3){showStatus('composeStatus','Choose up to 3 media files.');return}
+  let total=0;
+  for(const file of files){
+    if(!/^(image|audio|video)\//i.test(file.type||'')){showStatus('composeStatus','Attachments must be images, audio, or video.');return}
+    if(Number(file.size)>10*1024*1024){showStatus('composeStatus','Each attachment must be 10 MB or smaller.');return}
+    total+=Number(file.size)||0;
+  }
+  if(total>20*1024*1024){showStatus('composeStatus','Total attachments must be 20 MB or smaller.');return}
+
+  const form=new FormData();
+  form.append('payload',JSON.stringify(payload));
+  files.forEach(file=>form.append('media',file));
+
+  showStatus('composeStatus','Sending…');$('sendBtn').disabled=true;
   try{
-    const result=await api('/api/messages',{method:'POST',body:JSON.stringify(payload)});
-    $('messageTitle').value='';$('richEditor').innerHTML='';$('pollOptions').innerHTML='';ensurePollOptions();
-    showStatus('composeStatus','Sent to '+result.students+' student'+(result.students===1?'':'s')+'.');refreshAudienceCount();
+    const result=await api('/api/messages',{method:'POST',body:form});
+    $('messageTitle').value='';$('richEditor').innerHTML='';$('pollOptions').innerHTML='';
+    if($('messageMedia'))$('messageMedia').value='';
+    ensurePollOptions();
+    const mediaNote=result.attachments?' · '+result.attachments+' attachment'+(result.attachments===1?'':'s'):'';
+    showStatus('composeStatus','Sent to '+result.students+' student'+(result.students===1?'':'s')+mediaNote+'.');
+    refreshAudienceCount();
   }catch(error){showStatus('composeStatus',error.message)}finally{$('sendBtn').disabled=false}
 }
+
 $('sendBtn').addEventListener('click',async()=>{
   const payload=composePayload();
   if(!payload.title){showStatus('composeStatus','Add a title.');return}
@@ -130,10 +152,13 @@ async function loadSent(){
       const poll=item.pollId?'<button class="quiet compact" data-results="'+esc(item.pollId)+'">Results</button>':'';
       const feedback=item.kind==='feedback_request'?'<button class="quiet compact" data-feedback-responses="'+esc(item.id)+'">Responses'+(item.responseCount?' ('+item.responseCount+')':'')+'</button>':'';
       const kindLabel=item.kind==='feedback_request'?'feedback request':item.kind;
-      return '<article class="sent-card"><div class="sent-top"><div><h3>'+esc(item.title)+'</h3><div class="meta">'+esc(kindLabel)+' · '+esc(item.audienceLabel)+' · '+new Date(item.createdAt).toLocaleString()+'</div></div><div>'+poll+feedback+'</div></div><div class="chips"><span class="chip">'+item.receivedCount+' received</span><span class="chip">'+item.readCount+' read</span><span class="chip">'+item.pushCount+' push enabled</span></div></article>';
+      const sender=me?.isAdmin&&item.createdBy?' · Sent by '+esc(item.createdBy):'';
+      const attachments=item.attachmentCount?'<span class="chip">'+item.attachmentCount+' media</span>':'';
+      return '<article class="sent-card"><div class="sent-top"><div><h3>'+esc(item.title)+'</h3><div class="meta">'+esc(kindLabel)+' · '+esc(item.audienceLabel)+' · '+new Date(item.createdAt).toLocaleString()+sender+'</div></div><div>'+poll+feedback+'</div></div><div class="chips"><span class="chip">'+item.receivedCount+' received</span><span class="chip">'+item.readCount+' read</span><span class="chip">'+item.pushCount+' push enabled</span>'+attachments+'</div></article>';
     }).join('');
   }catch(error){target.innerHTML='<p class="status danger-text">'+esc(error.message)+'</p>'}
 }
+
 $('refreshSent').addEventListener('click',loadSent);
 $('sentList').addEventListener('click',async event=>{
   const pollButton=event.target.closest('[data-results]');
@@ -149,7 +174,21 @@ $('sentList').addEventListener('click',async event=>{
       const data=await api('/api/feedback-requests/'+encodeURIComponent(feedbackButton.dataset.feedbackResponses)+'/responses');
       $('resultsBody').innerHTML=data.responses.length?data.responses.map(item=>{
         const media=(item.attachments||[]).map(a=>'<a class="chip" href="'+esc(a.url)+'" target="_blank" rel="noopener">'+esc(a.filename)+'</a>').join('');
-        return '<article class="feedback-response-card"><div class="meta">'+new Date(item.createdAt).toLocaleString()+'</div><div class="feedback-response-body">'+(item.bodyHtml||esc(item.bodyText))+'</div>'+(media?'<div class="chips">'+media+'</div>':'')+'</article>';
+        const contact=[];
+        if(item.email)contact.push('<a class="contact-action" href="mailto:'+esc(item.email)+'">Email</a>');
+        if(item.phone){
+          const phoneHref=String(item.phone).replace(/[^0-9+]/g,'');
+          const digits=String(item.phone).replace(/\D/g,'');
+          if(phoneHref){
+            contact.push('<a class="contact-action" href="tel:'+esc(phoneHref)+'">Call</a>');
+            contact.push('<a class="contact-action" href="sms:'+esc(phoneHref)+'">Text</a>');
+          }
+          if(digits.length>=7)contact.push('<a class="contact-action" href="https://wa.me/'+esc(digits)+'" target="_blank" rel="noopener">WhatsApp</a>');
+        }
+        const identity=(item.name||item.email||item.phone)
+          ? '<div class="feedback-contact"><strong>'+esc(item.name||'Feedback contact')+'</strong>'+(item.email?'<span>'+esc(item.email)+'</span>':'')+(item.phone?'<span>'+esc(item.phone)+'</span>':'')+(contact.length?'<div class="contact-actions">'+contact.join('')+'</div>':'')+'</div>'
+          : '<div class="meta">Anonymous response</div>';
+        return '<article class="feedback-response-card"><div class="meta">'+new Date(item.createdAt).toLocaleString()+'</div>'+identity+'<div class="feedback-response-body">'+(item.bodyHtml||esc(item.bodyText))+'</div>'+(media?'<div class="chips">'+media+'</div>':'')+'</article>';
       }).join(''):'<p class="status">No responses yet.</p>';
       $('resultsDialog').showModal();
     }
