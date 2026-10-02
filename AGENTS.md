@@ -94,8 +94,35 @@ When a provider call fails, log the provider HTTP status and sanitized response 
 
 A `feedback_request` is a typed announcement. It uses the sender's Chabura-announcement permission (or broadcast permission for all-student sends). Each recipient gets a random invitation token and a targeted inbox row.
 
-Student replies are anonymous to the sender. Invitation URLs must never contain installation IDs.
+Student replies are anonymous by default. A student may optionally supply name, email, and/or phone when they want a direct reply; never infer identity from the invitation token. Invitation URLs must never contain installation IDs.
 
 Media attachments are stored in the existing Cloudflare R2 bucket through the `MEDIA` binding under `feedback-media/<zman>/...`. Accepted files are images, audio, and video only, at most 3 files, 10 MB each, 20 MB total. Media is not publicly bucket-addressable; the admin/sender downloads through an authenticated Worker route.
 
 The Sent tab's "received" count is the intended known-installation audience saved at send time. "Read" is the number of distinct installations with server-side `notification_state.read_at` for inbox rows associated with that message. Do not describe push delivery as read receipt.
+
+
+## Sent-history visibility
+
+The Sent panel is permission-scoped. Regular instructors see messages they created. Administrators see the complete message history across all instructors, without an arbitrary recent-item limit. Admin history must identify the sending account so cross-instructor activity is auditable.
+
+## Instructor media
+
+Instructor messages may include up to three image, audio, or video attachments, using the same 10 MB-per-file and 20 MB-total limits as student feedback. Store bytes in R2 and metadata separately in D1.
+
+Message attachments use unguessable capability URLs. Store only a hash of the capability token in D1, and route media through the Worker so possession of the message link is required to read it. Never expose raw R2 object keys as public URLs.
+
+When adding media support to an endpoint, preserve JSON compatibility for older clients and accept multipart requests from the upgraded client.
+
+## Feedback contact details
+
+Feedback may optionally include name, email, and phone. These fields are never required to submit feedback. Validate a supplied email but permit all contact fields to be blank.
+
+When showing contact details to an authorized instructor, expose direct actions for the channels the student supplied: email via `mailto:`, calling via `tel:`, texting via `sms:`, and WhatsApp via `https://wa.me/` after stripping non-digits. Do not invent missing contact information or infer a country code.
+
+## Public capability routes
+
+Public poll, feedback, and message-media capability URLs must be routed through the Worker before the authenticated application gate. Their tokens are bearer capabilities and must be validated server-side. Static asset routing must never swallow `/feedback/*` or `/message-media/*`.
+
+## Cross-app navigation
+
+Announcements should provide clear links to the Study and Analytics Dashboard applications. Keep external SCP-app URLs centralized or visibly identifiable so deployment-domain changes are easy to update.

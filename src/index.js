@@ -82,10 +82,12 @@ async function ensureSchema(env){
     "CREATE TABLE IF NOT EXISTS announcement_poll_votes (poll_id TEXT NOT NULL,invite_hash TEXT NOT NULL,option_id TEXT NOT NULL,voted_at TEXT NOT NULL,PRIMARY KEY(poll_id,invite_hash))",
     "CREATE TABLE IF NOT EXISTS announcement_feedback_invites (token_hash TEXT PRIMARY KEY,message_id TEXT NOT NULL,installation_hash TEXT NOT NULL,created_at TEXT NOT NULL,responded_at TEXT)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_invites_message ON announcement_feedback_invites(message_id)",
-    "CREATE TABLE IF NOT EXISTS announcement_feedback_responses (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,invite_hash TEXT NOT NULL UNIQUE,body_text TEXT NOT NULL,body_html TEXT NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS announcement_feedback_responses (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,invite_hash TEXT NOT NULL UNIQUE,body_text TEXT NOT NULL,body_html TEXT NOT NULL,responder_name TEXT,responder_email TEXT,responder_phone TEXT,created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_responses_message ON announcement_feedback_responses(message_id,created_at)",
     "CREATE TABLE IF NOT EXISTS announcement_feedback_attachments (id TEXT PRIMARY KEY,response_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,filename TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL,created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_attachments_response ON announcement_feedback_attachments(response_id)",
+    "CREATE TABLE IF NOT EXISTS announcement_message_attachments (id TEXT PRIMARY KEY,message_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,filename TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL,access_token_hash TEXT NOT NULL,created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON announcement_message_attachments(message_id,created_at)",
     "CREATE TABLE IF NOT EXISTS notification_state (notification_id TEXT NOT NULL,installation_id TEXT NOT NULL,read_at TEXT,archived_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(notification_id,installation_id))",
     "CREATE TABLE IF NOT EXISTS app_notifications (id TEXT PRIMARY KEY,kind TEXT NOT NULL,zman TEXT,title TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT,target_installation_id TEXT,content_type TEXT,content_id TEXT,body_html TEXT,action_json TEXT,dedupe_key TEXT UNIQUE)",
     "CREATE TABLE IF NOT EXISTS push_config (id INTEGER PRIMARY KEY CHECK(id=1),public_key TEXT NOT NULL,private_key TEXT NOT NULL,subject TEXT NOT NULL,created_at TEXT NOT NULL)",
@@ -93,6 +95,10 @@ async function ensureSchema(env){
   ];
   for(const statement of sql)await env.DB.prepare(statement).run();
   try{await env.DB.prepare("ALTER TABLE app_notifications ADD COLUMN body_html TEXT").run()}catch(error){if(!/duplicate column/i.test(String(error?.message||error)))throw error}
+  for(const column of ["responder_name TEXT","responder_email TEXT","responder_phone TEXT"]){
+    try{await env.DB.prepare("ALTER TABLE announcement_feedback_responses ADD COLUMN "+column).run()}
+    catch(error){if(!/duplicate column/i.test(String(error?.message||error)))throw error}
+  }
   schemaReady=true;
 }
 async function configSecret(env,key){
@@ -229,48 +235,129 @@ async function audienceCountRoute(request,env,user){
 }
 
 async function createMessage(request,env,user){
-  if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});let body;try{body=await request.json()}catch(_){return json({error:'Invalid JSON'},{status:400})}
-  const requestedKind=String(body?.kind||'announcement'),kind=['poll','feedback_request'].includes(requestedKind)?requestedKind:'announcement',audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura',region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
+  if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});
+
+  let body={},media=[];
+  const contentType=String(request.headers.get('Content-Type')||'').toLowerCase();
+  try{
+    if(contentType.includes('multipart/form-data')){
+      const form=await request.formData();
+      body=JSON.parse(String(form.get('payload')||'{}'));
+      media=form.getAll('media').filter(value=>value&&typeof value==='object'&&typeof value.arrayBuffer==='function');
+    }else{
+      body=await request.json();
+    }
+  }catch(_){return json({error:'Invalid message payload'},{status:400})}
+
+  const requestedKind=String(body?.kind||'announcement');
+  const kind=['poll','feedback_request'].includes(requestedKind)?requestedKind:'announcement';
+  const audienceType=body?.audienceType==='broadcast'?'broadcast':'chabura';
+  const region=text(body?.region,120),chabura=text(body?.chabura,180),title=text(body?.title,120),zman=env.CURRENT_ZMAN||CURRENT_ZMAN;
   if(!title)return json({error:'Title is required.'},{status:400});
   if(!permissionAllowed(user,kind,audienceType,region,chabura))return json({error:'You do not have permission for that audience.'},{status:403});
   if(audienceType==='chabura'&&!CHABURA_KEYS.has(String(region)+'\u0000'+String(chabura)))return json({error:'Unknown chabura.'},{status:400});
-  const bodyHtml=sanitizeRichHtml(body?.bodyHtml),bodyText=text(richToPlain(bodyHtml),5000);if(!bodyText)return json({error:'Message body is required.'},{status:400});
+
+  const sanitizedBody=sanitizeRichHtml(body?.bodyHtml);
+  const originalBodyText=text(richToPlain(sanitizedBody),5000);
+  if(!originalBodyText)return json({error:'Message body is required.'},{status:400});
+
   const pollOptions=Array.isArray(body?.pollOptions)?[...new Set(body.pollOptions.map(item=>text(item,180)).filter(Boolean))].slice(0,8):[];
   if(kind==='poll'&&pollOptions.length<2)return json({error:'Polls need at least two options.'},{status:400});
-  const count=await audienceCount(env,audienceType,region,chabura,zman),messageId=crypto.randomUUID(),pollId=kind==='poll'?crypto.randomUUID():null,created=nowIso();
-  const audienceLabel=audienceType==='broadcast'?'All SCP students':chabura+' · '+region;
-  const messageStmt=env.DB.prepare("INSERT INTO announcement_messages(id,created_by_email,kind,audience_type,zman,region,chabura,title,body_text,body_html,poll_id,recipient_count,push_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(messageId,user.email,kind,audienceType,audienceType==='broadcast'?null:zman,region,chabura,title,bodyText,bodyHtml,pollId,count.students,count.pushEnabled,created);
-  const statements=[messageStmt];
-  if(pollId){
-    statements.push(env.DB.prepare("INSERT INTO announcement_polls(id,message_id,title,body_html,created_by_email,created_at) VALUES(?,?,?,?,?,?)").bind(pollId,messageId,title,bodyHtml,user.email,created));
-    pollOptions.forEach((label,index)=>statements.push(env.DB.prepare("INSERT INTO announcement_poll_options(poll_id,option_id,label,sort_order) VALUES(?,?,?,?)").bind(pollId,crypto.randomUUID(),label,index)));
-  }
-  await runBatch(env,statements);
 
-  const studyUrl=text(env.STUDY_APP_URL,500)||'https://scp-study.ksariash.workers.dev';
-  if(kind==='announcement'&&audienceType==='broadcast'){
-    const notificationId=crypto.randomUUID();
-    await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?, 'announcement',NULL,?,?,?,?,NULL,NULL,?)").bind(notificationId,title,bodyText,bodyHtml,created,'message:'+messageId).run();
-    await pushMany(env,count.push,()=>({title,body:pushBody(bodyText),tag:'scp-'+notificationId,data:{notificationId,kind:'announcement',zman:null,url:studyUrl+'/?notifications=1'}}));
-  }else{
-    const pushByInstall=new Map();for(const row of count.push){const id=String(row.installation_id);if(!pushByInstall.has(id))pushByInstall.set(id,[]);pushByInstall.get(id).push(row)}
-    for(const installationId of count.ids){
-      const notificationId=crypto.randomUUID();let actionJson=null,actionUrl=studyUrl+'/?notifications=1';
-      if(pollId){
-        const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),pollUrl=new URL('/poll/'+pollId,new URL(request.url).origin);pollUrl.searchParams.set('t',invite);actionUrl=pollUrl.href;actionJson=JSON.stringify({type:'poll',label:'Vote',url:actionUrl,pollId});
-        await env.DB.prepare("INSERT INTO announcement_poll_invites(token_hash,poll_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,pollId,installationHash,created).run();
-      }
-      else if(kind==='feedback_request'){
-        const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId),feedbackUrl=new URL('/feedback/'+messageId,new URL(request.url).origin);
-        feedbackUrl.searchParams.set('t',invite);actionUrl=feedbackUrl.href;actionJson=JSON.stringify({type:'feedback_request',label:'Reply',url:actionUrl});
-        await env.DB.prepare("INSERT INTO announcement_feedback_invites(token_hash,message_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,messageId,installationHash,created).run();
-      }
-      await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(notificationId,kind,zman,title,bodyText,bodyHtml,created,installationId,actionJson,'message:'+messageId+':'+installationId).run();
-      const rows=pushByInstall.get(installationId)||[];
-      await pushMany(env,rows,()=>({title,body:pushBody(bodyText),tag:'scp-'+notificationId,data:{notificationId,kind,zman,url:actionUrl}}));
-    }
+  if(media.length>3)return json({error:'Choose up to 3 media files.'},{status:400});
+  let mediaTotal=0;
+  for(const file of media){
+    const type=String(file.type||'').toLowerCase();
+    if(!/^(image|audio|video)\//.test(type))return json({error:'Attachments must be images, audio, or video.'},{status:400});
+    if(Number(file.size)>10*1024*1024)return json({error:'Each attachment must be 10 MB or smaller.'},{status:400});
+    mediaTotal+=Number(file.size)||0;
   }
-  return json({ok:true,messageId,pollId,students:count.students,pushEnabled:count.pushEnabled,audienceLabel});
+  if(mediaTotal>20*1024*1024)return json({error:'Total attachments must be 20 MB or smaller.'},{status:400});
+  if(media.length&&!env.MEDIA)return json({error:'Media storage is not configured.'},{status:503});
+
+  const count=await audienceCount(env,audienceType,region,chabura,zman);
+  const messageId=crypto.randomUUID(),pollId=kind==='poll'?crypto.randomUUID():null,created=nowIso();
+  const audienceLabel=audienceType==='broadcast'?'All SCP students':chabura+' · '+region;
+  const attachmentRows=[];
+  let mediaPersisted=false;
+
+  try{
+    for(const file of media){
+      const attachmentId=crypto.randomUUID(),accessToken=randomToken(24),accessTokenHash=await sha256(accessToken);
+      const objectKey='message-media/'+CURRENT_ZMAN+'/'+messageId+'/'+attachmentId;
+      const filename=cleanFilename(file.name);
+      await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+      const mediaUrl=new URL('/message-media/'+attachmentId,new URL(request.url).origin);
+      mediaUrl.searchParams.set('t',accessToken);
+      attachmentRows.push({
+        id:attachmentId,objectKey,filename,contentType:file.type||'application/octet-stream',
+        size:Number(file.size)||0,accessTokenHash,url:mediaUrl.href
+      });
+    }
+
+    const attachmentHtml=attachmentRows.length
+      ? '<p><strong>Attachments</strong></p><ul>'+attachmentRows.map(item=>'<li><a href="'+escapeHtml(item.url)+'" target="_blank" rel="noopener">'+escapeHtml(item.filename)+'</a></li>').join('')+'</ul>'
+      : '';
+    const bodyHtml=sanitizedBody+attachmentHtml;
+    const bodyText=text(originalBodyText+(attachmentRows.length?'\n\nAttachments: '+attachmentRows.map(item=>item.filename).join(', '):''),5000);
+
+    const messageStmt=env.DB.prepare("INSERT INTO announcement_messages(id,created_by_email,kind,audience_type,zman,region,chabura,title,body_text,body_html,poll_id,recipient_count,push_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(messageId,user.email,kind,audienceType,audienceType==='broadcast'?null:zman,region,chabura,title,bodyText,bodyHtml,pollId,count.students,count.pushEnabled,created);
+    const statements=[messageStmt,
+      ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_message_attachments(id,message_id,object_key,filename,content_type,size_bytes,access_token_hash,created_at) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(item.id,messageId,item.objectKey,item.filename,item.contentType,item.size,item.accessTokenHash,created))
+    ];
+    if(pollId){
+      statements.push(env.DB.prepare("INSERT INTO announcement_polls(id,message_id,title,body_html,created_by_email,created_at) VALUES(?,?,?,?,?,?)").bind(pollId,messageId,title,bodyHtml,user.email,created));
+      pollOptions.forEach((label,index)=>statements.push(env.DB.prepare("INSERT INTO announcement_poll_options(poll_id,option_id,label,sort_order) VALUES(?,?,?,?)").bind(pollId,crypto.randomUUID(),label,index)));
+    }
+    await runBatch(env,statements);
+    mediaPersisted=true;
+
+    const studyUrl=text(env.STUDY_APP_URL,500)||'https://scp-study.ksariash.workers.dev';
+    if(kind==='announcement'&&audienceType==='broadcast'){
+      const notificationId=crypto.randomUUID();
+      await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?, 'announcement',NULL,?,?,?,?,NULL,NULL,?)")
+        .bind(notificationId,title,bodyText,bodyHtml,created,'message:'+messageId).run();
+      await pushMany(env,count.push,()=>({title,body:pushBody(originalBodyText),tag:'scp-'+notificationId,data:{notificationId,kind:'announcement',zman:null,url:studyUrl+'/?notifications=1'}}));
+    }else{
+      const pushByInstall=new Map();
+      for(const row of count.push){
+        const id=String(row.installation_id);
+        if(!pushByInstall.has(id))pushByInstall.set(id,[]);
+        pushByInstall.get(id).push(row);
+      }
+      for(const installationId of count.ids){
+        const notificationId=crypto.randomUUID();
+        let actionJson=null,actionUrl=studyUrl+'/?notifications=1';
+        if(pollId){
+          const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId);
+          const pollUrl=new URL('/poll/'+pollId,new URL(request.url).origin);
+          pollUrl.searchParams.set('t',invite);
+          actionUrl=pollUrl.href;
+          actionJson=JSON.stringify({type:'poll',label:'Vote',url:actionUrl,pollId});
+          await env.DB.prepare("INSERT INTO announcement_poll_invites(token_hash,poll_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,pollId,installationHash,created).run();
+        }else if(kind==='feedback_request'){
+          const invite=randomToken(24),inviteHash=await sha256(invite),installationHash=await sha256(installationId);
+          const feedbackUrl=new URL('/feedback/'+messageId,new URL(request.url).origin);
+          feedbackUrl.searchParams.set('t',invite);
+          actionUrl=feedbackUrl.href;
+          actionJson=JSON.stringify({type:'feedback_request',label:'Reply',url:actionUrl});
+          await env.DB.prepare("INSERT INTO announcement_feedback_invites(token_hash,message_id,installation_hash,created_at) VALUES(?,?,?,?)").bind(inviteHash,messageId,installationHash,created).run();
+        }
+        await env.DB.prepare("INSERT INTO app_notifications(id,kind,zman,title,body,body_html,created_at,target_installation_id,action_json,dedupe_key) VALUES(?,?,?,?,?,?,?,?,?,?)")
+          .bind(notificationId,kind,zman,title,bodyText,bodyHtml,created,installationId,actionJson,'message:'+messageId+':'+installationId).run();
+        const rows=pushByInstall.get(installationId)||[];
+        await pushMany(env,rows,()=>({title,body:pushBody(originalBodyText),tag:'scp-'+notificationId,data:{notificationId,kind,zman,url:actionUrl}}));
+      }
+    }
+    return json({ok:true,messageId,pollId,students:count.students,pushEnabled:count.pushEnabled,audienceLabel,attachments:attachmentRows.length});
+  }catch(error){
+    if(env.MEDIA&&!mediaPersisted){
+      await Promise.allSettled(attachmentRows.map(item=>env.MEDIA.delete(item.objectKey)));
+    }
+    throw error;
+  }
 }
 
 async function listMessages(env,user){
@@ -278,15 +365,19 @@ async function listMessages(env,user){
     COALESCE((SELECT COUNT(DISTINCT s.installation_id)
       FROM app_notifications n JOIN notification_state s ON s.notification_id=n.id
       WHERE (n.dedupe_key='message:'||m.id OR n.dedupe_key LIKE 'message:'||m.id||':%') AND s.read_at IS NOT NULL),0) read_count,
-    COALESCE((SELECT COUNT(*) FROM announcement_feedback_responses r WHERE r.message_id=m.id),0) response_count
+    COALESCE((SELECT COUNT(*) FROM announcement_feedback_responses r WHERE r.message_id=m.id),0) response_count,
+    COALESCE((SELECT COUNT(*) FROM announcement_message_attachments a WHERE a.message_id=m.id),0) attachment_count
     FROM announcement_messages m`;
-  const sql=user.isAdmin?base+" ORDER BY m.created_at DESC LIMIT 100":base+" WHERE m.created_by_email=? ORDER BY m.created_at DESC LIMIT 100";
+  const sql=user.isAdmin
+    ? base+" ORDER BY m.created_at DESC"
+    : base+" WHERE m.created_by_email=? ORDER BY m.created_at DESC LIMIT 100";
   const result=user.isAdmin?await env.DB.prepare(sql).all():await env.DB.prepare(sql).bind(user.email).all();
   return json({messages:(result.results||[]).map(row=>({
     id:row.id,kind:row.kind,title:row.title,audienceType:row.audience_type,
     audienceLabel:row.audience_type==='broadcast'?'All SCP students':(row.chabura+' · '+row.region),
     recipientCount:Number(row.recipient_count)||0,receivedCount:Number(row.recipient_count)||0,
     readCount:Number(row.read_count)||0,responseCount:Number(row.response_count)||0,
+    attachmentCount:Number(row.attachment_count)||0,
     pushCount:Number(row.push_count)||0,pollId:row.poll_id||null,createdAt:row.created_at,createdBy:row.created_by_email
   }))});
 }
@@ -334,26 +425,72 @@ function feedbackResponsePage(messageId,token,data){
   if(!data)return '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback unavailable</title><style>body{font-family:system-ui;padding:30px;color:#17243c}</style><h1>Feedback unavailable</h1><p>This feedback link is invalid or no longer available.</p>';
   const already=!!data.invite.responded_at;
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(data.invite.title)}</title>
-  <style>body{margin:0;background:#eef3fb;color:#14213d;font-family:system-ui}.card{width:min(680px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(22,37,84,.1)}h1{margin:0 0 10px;font-size:1.35rem}.prompt{color:#4d5b70;line-height:1.55}.toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:7px;border:1px solid #dbe4f0;border-bottom:0;border-radius:12px 12px 0 0;background:#f7f9fc}.toolbar button{border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:6px 9px}.editor{min-height:160px;border:1px solid #dbe4f0;border-radius:0 0 12px 12px;padding:12px;outline:none;line-height:1.5}.editor:empty:before{content:'Write your feedback…';color:#98a5b7}.files{margin-top:12px;padding:11px;border:1px solid #dbe4f0;border-radius:12px}.files small{display:block;color:#6f7e95;margin-top:5px}.send{margin-top:13px;border:0;border-radius:10px;padding:11px 16px;background:#275bd6;color:#fff;font-weight:800}.status{margin-top:10px;color:#58667c;font-size:.86rem}</style></head>
+  <style>
+    body{margin:0;background:#eef3fb;color:#14213d;font-family:system-ui}
+    .card{width:min(680px,calc(100% - 24px));margin:28px auto;background:#fff;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(22,37,84,.1);box-sizing:border-box}
+    h1{margin:0 0 10px;font-size:1.35rem}.prompt{color:#4d5b70;line-height:1.55}
+    .contact-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0 12px}.contact-fields label:first-child{grid-column:1/-1}
+    .contact-fields label{display:grid;gap:5px;color:#536177;font-size:.82rem;font-weight:700}.contact-fields input{width:100%;box-sizing:border-box;border:1px solid #dbe4f0;border-radius:10px;padding:10px 11px;font:inherit;color:#14213d;background:#fff}
+    .contact-note{grid-column:1/-1;margin:0;color:#75839a;font-size:.76rem;font-weight:500}
+    .toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:7px;border:1px solid #dbe4f0;border-bottom:0;border-radius:12px 12px 0 0;background:#f7f9fc}.toolbar button{border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:6px 9px}
+    .editor{min-height:160px;border:1px solid #dbe4f0;border-radius:0 0 12px 12px;padding:12px;outline:none;line-height:1.5}.editor:empty:before{content:'Write your feedback…';color:#98a5b7}
+    .files{display:block;margin-top:12px;padding:11px;border:1px solid #dbe4f0;border-radius:12px}.files small{display:block;color:#6f7e95;margin-top:5px}
+    .send{margin-top:13px;border:0;border-radius:10px;padding:11px 16px;background:#275bd6;color:#fff;font-weight:800}.status{margin-top:10px;color:#58667c;font-size:.86rem}
+    @media(max-width:560px){.card{margin:12px auto;padding:16px}.contact-fields{grid-template-columns:1fr}.contact-fields label:first-child,.contact-note{grid-column:auto}}
+  </style></head>
   <body><main class="card"><h1>${escapeHtml(data.invite.title)}</h1><div class="prompt">${data.invite.body_html||escapeHtml(data.invite.body_text||'')}</div>
   ${already?'<p class="status"><strong>Your feedback was submitted.</strong></p>':`
-  <div style="margin-top:18px"><div class="toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="underline"><u>U</u></button><button type="button" data-cmd="insertUnorderedList">• List</button><button type="button" data-cmd="insertOrderedList">1. List</button><button type="button" id="replyLink">Link</button></div><div id="replyEditor" class="editor" contenteditable="true"></div></div>
+  <div class="contact-fields">
+    <label>Name (optional)<input id="replyName" type="text" autocomplete="name" maxlength="120"></label>
+    <label>Email (optional)<input id="replyEmail" type="email" autocomplete="email" maxlength="320"></label>
+    <label>Phone (optional)<input id="replyPhone" type="tel" autocomplete="tel" maxlength="40"></label>
+    <p class="contact-note">Add contact information only if you would like an instructor to reply to you directly.</p>
+  </div>
+  <div><div class="toolbar"><button type="button" data-cmd="bold"><b>B</b></button><button type="button" data-cmd="italic"><i>I</i></button><button type="button" data-cmd="underline"><u>U</u></button><button type="button" data-cmd="insertUnorderedList">• List</button><button type="button" data-cmd="insertOrderedList">1. List</button><button type="button" id="replyLink">Link</button></div><div id="replyEditor" class="editor" contenteditable="true"></div></div>
   <label class="files">Media attachments <input id="replyFiles" type="file" accept="image/*,audio/*,video/*" multiple><small>Up to 3 files, 10 MB each.</small></label>
   <button id="replySend" class="send" type="button">Send feedback</button><div id="replyStatus" class="status"></div>
   <script>
   document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{document.execCommand(b.dataset.cmd,false,null);document.getElementById('replyEditor').focus()}));
   document.getElementById('replyLink').addEventListener('click',()=>{const u=prompt('Link URL');if(!u)return;try{const x=new URL(u);if(!['http:','https:'].includes(x.protocol))throw 0;document.execCommand('createLink',false,x.href)}catch(_){alert('Use a valid http or https URL.')}});
-  document.getElementById('replySend').addEventListener('click',async()=>{const editor=document.getElementById('replyEditor'),status=document.getElementById('replyStatus'),button=document.getElementById('replySend'),files=[...document.getElementById('replyFiles').files];if(!editor.textContent.trim()){status.textContent='Write a response.';return}if(files.length>3){status.textContent='Choose up to 3 files.';return}const fd=new FormData();fd.append('token',${JSON.stringify(token)});fd.append('bodyHtml',editor.innerHTML);files.forEach(f=>fd.append('media',f));button.disabled=true;status.textContent='Sending…';try{const r=await fetch('/api/feedback-requests/${encodeURIComponent(messageId)}/respond',{method:'POST',body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not send');status.textContent='Feedback sent.';editor.contentEditable='false';button.remove();document.getElementById('replyFiles').disabled=true}catch(e){status.textContent=e.message;button.disabled=false}});
+  document.getElementById('replySend').addEventListener('click',async()=>{
+    const editor=document.getElementById('replyEditor'),status=document.getElementById('replyStatus'),button=document.getElementById('replySend'),files=[...document.getElementById('replyFiles').files];
+    if(!editor.textContent.trim()){status.textContent='Write a response.';return}
+    if(files.length>3){status.textContent='Choose up to 3 files.';return}
+    const fd=new FormData();
+    fd.append('token',${JSON.stringify(token)});
+    fd.append('bodyHtml',editor.innerHTML);
+    fd.append('name',document.getElementById('replyName').value.trim());
+    fd.append('email',document.getElementById('replyEmail').value.trim());
+    fd.append('phone',document.getElementById('replyPhone').value.trim());
+    files.forEach(f=>fd.append('media',f));
+    button.disabled=true;status.textContent='Sending…';
+    try{
+      const r=await fetch('/api/feedback-requests/${encodeURIComponent(messageId)}/respond',{method:'POST',body:fd});
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not send');
+      status.textContent='Feedback sent.';editor.contentEditable='false';button.remove();
+      document.getElementById('replyFiles').disabled=true;
+      ['replyName','replyEmail','replyPhone'].forEach(id=>document.getElementById(id).disabled=true);
+    }catch(e){status.textContent=e.message;button.disabled=false}
+  });
   </script>`}</main></body></html>`;
 }
+
 function cleanFilename(value){return String(value||'attachment').replace(/[\r\n"]/g,'').replace(/[^a-zA-Z0-9._ -]/g,'_').slice(0,160)||'attachment'}
 async function submitFeedbackResponse(request,env,messageId){
   if(!sameOrigin(request))return json({error:'Invalid origin'},{status:403});
   const form=await request.formData(),token=String(form.get('token')||''),view=await feedbackInviteView(env,messageId,token);
   if(!view)return json({error:'Invalid feedback invitation'},{status:403});
   if(view.invite.responded_at)return json({error:'Feedback was already submitted.'},{status:409});
+
   const bodyHtml=sanitizeRichHtml(form.get('bodyHtml')),bodyText=text(richToPlain(bodyHtml),10000);
   if(!bodyText)return json({error:'Feedback message is required.'},{status:400});
+
+  const responderName=text(form.get('name'),120);
+  const rawResponderEmail=text(form.get('email'),320);
+  const responderEmail=rawResponderEmail?email(rawResponderEmail):'';
+  if(rawResponderEmail&&!responderEmail)return json({error:'Enter a valid email address or leave email blank.'},{status:400});
+  const responderPhone=text(form.get('phone'),40);
+
   const media=form.getAll('media').filter(value=>value&&typeof value==='object'&&typeof value.arrayBuffer==='function');
   if(media.length>3)return json({error:'Choose up to 3 media files.'},{status:400});
   let total=0;
@@ -365,32 +502,61 @@ async function submitFeedbackResponse(request,env,messageId){
   }
   if(total>20*1024*1024)return json({error:'Total attachments must be 20 MB or smaller.'},{status:400});
   if(media.length&&!env.MEDIA)return json({error:'Media storage is not configured.'},{status:503});
+
   const responseId=crypto.randomUUID(),created=nowIso(),attachmentRows=[];
-  for(const file of media){
-    const attachmentId=crypto.randomUUID(),objectKey='feedback-media/'+CURRENT_ZMAN+'/'+messageId+'/'+responseId+'/'+attachmentId;
-    await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
-    attachmentRows.push({id:attachmentId,objectKey,filename:cleanFilename(file.name),contentType:file.type||'application/octet-stream',size:Number(file.size)||0});
+  try{
+    for(const file of media){
+      const attachmentId=crypto.randomUUID(),objectKey='feedback-media/'+CURRENT_ZMAN+'/'+messageId+'/'+responseId+'/'+attachmentId;
+      await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+      attachmentRows.push({id:attachmentId,objectKey,filename:cleanFilename(file.name),contentType:file.type||'application/octet-stream',size:Number(file.size)||0});
+    }
+    const statements=[
+      env.DB.prepare("INSERT INTO announcement_feedback_responses(id,message_id,invite_hash,body_text,body_html,responder_name,responder_email,responder_phone,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
+        .bind(responseId,messageId,view.tokenHash,bodyText,bodyHtml,responderName||null,responderEmail||null,responderPhone||null,created),
+      env.DB.prepare("UPDATE announcement_feedback_invites SET responded_at=? WHERE token_hash=?").bind(created,view.tokenHash),
+      ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_feedback_attachments(id,response_id,object_key,filename,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?)")
+        .bind(item.id,responseId,item.objectKey,item.filename,item.contentType,item.size,created))
+    ];
+    await runBatch(env,statements);
+    return json({ok:true,responseId});
+  }catch(error){
+    if(env.MEDIA)await Promise.allSettled(attachmentRows.map(item=>env.MEDIA.delete(item.objectKey)));
+    throw error;
   }
-  const statements=[
-    env.DB.prepare("INSERT INTO announcement_feedback_responses(id,message_id,invite_hash,body_text,body_html,created_at) VALUES(?,?,?,?,?,?)").bind(responseId,messageId,view.tokenHash,bodyText,bodyHtml,created),
-    env.DB.prepare("UPDATE announcement_feedback_invites SET responded_at=? WHERE token_hash=?").bind(created,view.tokenHash),
-    ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_feedback_attachments(id,response_id,object_key,filename,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?)").bind(item.id,responseId,item.objectKey,item.filename,item.contentType,item.size,created))
-  ];
-  await runBatch(env,statements);
-  return json({ok:true,responseId});
 }
+
 async function feedbackResponses(env,user,messageId){
   const message=await env.DB.prepare("SELECT id,title,created_by_email FROM announcement_messages WHERE id=? AND kind='feedback_request'").bind(messageId).first();
   if(!message)return json({error:'Feedback request not found'},{status:404});
   if(!user.isAdmin&&message.created_by_email!==user.email)return json({error:'Not permitted'},{status:403});
-  const rows=(await env.DB.prepare("SELECT id,body_html,body_text,created_at FROM announcement_feedback_responses WHERE message_id=? ORDER BY created_at DESC").bind(messageId).all()).results||[];
+  const rows=(await env.DB.prepare("SELECT id,body_html,body_text,responder_name,responder_email,responder_phone,created_at FROM announcement_feedback_responses WHERE message_id=? ORDER BY created_at DESC").bind(messageId).all()).results||[];
   const result=[];
   for(const row of rows){
     const attachments=(await env.DB.prepare("SELECT id,filename,content_type,size_bytes FROM announcement_feedback_attachments WHERE response_id=? ORDER BY created_at").bind(row.id).all()).results||[];
-    result.push({id:row.id,bodyHtml:row.body_html,bodyText:row.body_text,createdAt:row.created_at,attachments:attachments.map(a=>({id:a.id,filename:a.filename,contentType:a.content_type,sizeBytes:Number(a.size_bytes)||0,url:'/api/feedback-media/'+a.id}))});
+    result.push({
+      id:row.id,bodyHtml:row.body_html,bodyText:row.body_text,createdAt:row.created_at,
+      name:row.responder_name||null,email:row.responder_email||null,phone:row.responder_phone||null,
+      attachments:attachments.map(a=>({id:a.id,filename:a.filename,contentType:a.content_type,sizeBytes:Number(a.size_bytes)||0,url:'/api/feedback-media/'+a.id}))
+    });
   }
   return json({messageId,title:message.title,responses:result});
 }
+async function messageMedia(request,env,attachmentId){
+  const url=new URL(request.url),token=String(url.searchParams.get('t')||'');
+  if(!token)return new Response('Not found',{status:404});
+  const tokenHash=await sha256(token);
+  const row=await env.DB.prepare("SELECT object_key,filename,content_type,access_token_hash FROM announcement_message_attachments WHERE id=?").bind(attachmentId).first();
+  if(!row||row.access_token_hash!==tokenHash)return new Response('Not found',{status:404});
+  const object=await env.MEDIA?.get(row.object_key);
+  if(!object)return new Response('Not found',{status:404});
+  const headers=new Headers();
+  headers.set('Content-Type',row.content_type||'application/octet-stream');
+  headers.set('Content-Disposition','inline; filename="'+cleanFilename(row.filename)+'"');
+  headers.set('Cache-Control','private, max-age=300');
+  headers.set('X-Robots-Tag','noindex, nofollow');
+  return new Response(object.body,{headers});
+}
+
 async function feedbackMedia(request,env,user,attachmentId){
   const row=await env.DB.prepare(`SELECT a.object_key,a.filename,a.content_type,m.created_by_email
     FROM announcement_feedback_attachments a
@@ -425,7 +591,7 @@ async function saveUser(request,env,admin){
 
 async function route(request,env){
   await setup(env);const url=new URL(request.url),path=url.pathname;
-  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:3,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:4,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
   if(path==='/api/meta'){
     const count=await env.DB.prepare("SELECT COUNT(*) n FROM announcement_users").first();
     const config=emailConfigStatus(env),adminCount=Number(count?.n||0);
@@ -448,6 +614,7 @@ async function route(request,env){
   if(path.startsWith('/poll/')&&request.method==='GET'){const pollId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await pollView(env,pollId,token);return html(pollPage(pollId,token,data))}
   const voteMatch=path.match(/^\/api\/polls\/([^/]+)\/vote$/);if(voteMatch&&request.method==='POST')return votePoll(request,env,decodeURIComponent(voteMatch[1]));
   if(path.startsWith('/feedback/')&&request.method==='GET'){const messageId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await feedbackInviteView(env,messageId,token);return html(feedbackResponsePage(messageId,token,data))}
+  const messageMediaMatch=path.match(/^\/message-media\/([^/]+)$/);if(messageMediaMatch&&request.method==='GET')return messageMedia(request,env,decodeURIComponent(messageMediaMatch[1]));
   const feedbackSubmit=path.match(/^\/api\/feedback-requests\/([^/]+)\/respond$/);if(feedbackSubmit&&request.method==='POST')return submitFeedbackResponse(request,env,decodeURIComponent(feedbackSubmit[1]));
   const user=await requireUser(request,env);
   if(path==='/api/me'&&request.method==='GET')return json(publicUser(user));
@@ -466,7 +633,7 @@ async function route(request,env){
 export default {
   async fetch(request,env){
     const url=new URL(request.url);
-    if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/poll/')||url.pathname==='/health'){
+    if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/poll/')||url.pathname.startsWith('/feedback/')||url.pathname.startsWith('/message-media/')||url.pathname==='/health'){
       try{return await route(request,env)}catch(error){return json({error:error?.message||'Server error'},{status:Number(error?.status)||500})}
     }
     return env.ASSETS.fetch(request);

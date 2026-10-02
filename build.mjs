@@ -10,3 +10,6 @@ for (const file of ["src/index.js","src/chaburas.js","public/app.js"]) {
   execFileSync(process.execPath, ["--check", file], { stdio: "inherit" });
 }
 console.log("Validated SCP Study Announcements source and " + CHABURAS.length + " chabura entries.");
+
+const html = await import("node:fs/promises").then(fs => fs.readFile("public/index.html","utf8"));
+for (const id of ["messageMedia","sentList","resultsBody"]) if (!html.includes('id="'+id+'"')) throw new Error("Missing required UI control: "+id);
