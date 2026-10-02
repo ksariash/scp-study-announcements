@@ -479,8 +479,16 @@ async function submitFeedbackResponse(request,env,messageId){
   const form=await request.formData(),token=String(form.get('token')||''),view=await feedbackInviteView(env,messageId,token);
   if(!view)return json({error:'Invalid feedback invitation'},{status:403});
   if(view.invite.responded_at)return json({error:'Feedback was already submitted.'},{status:409});
+
   const bodyHtml=sanitizeRichHtml(form.get('bodyHtml')),bodyText=text(richToPlain(bodyHtml),10000);
   if(!bodyText)return json({error:'Feedback message is required.'},{status:400});
+
+  const responderName=text(form.get('name'),120);
+  const rawResponderEmail=text(form.get('email'),320);
+  const responderEmail=rawResponderEmail?email(rawResponderEmail):'';
+  if(rawResponderEmail&&!responderEmail)return json({error:'Enter a valid email address or leave email blank.'},{status:400});
+  const responderPhone=text(form.get('phone'),40);
+
   const media=form.getAll('media').filter(value=>value&&typeof value==='object'&&typeof value.arrayBuffer==='function');
   if(media.length>3)return json({error:'Choose up to 3 media files.'},{status:400});
   let total=0;
@@ -492,20 +500,29 @@ async function submitFeedbackResponse(request,env,messageId){
   }
   if(total>20*1024*1024)return json({error:'Total attachments must be 20 MB or smaller.'},{status:400});
   if(media.length&&!env.MEDIA)return json({error:'Media storage is not configured.'},{status:503});
+
   const responseId=crypto.randomUUID(),created=nowIso(),attachmentRows=[];
-  for(const file of media){
-    const attachmentId=crypto.randomUUID(),objectKey='feedback-media/'+CURRENT_ZMAN+'/'+messageId+'/'+responseId+'/'+attachmentId;
-    await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
-    attachmentRows.push({id:attachmentId,objectKey,filename:cleanFilename(file.name),contentType:file.type||'application/octet-stream',size:Number(file.size)||0});
+  try{
+    for(const file of media){
+      const attachmentId=crypto.randomUUID(),objectKey='feedback-media/'+CURRENT_ZMAN+'/'+messageId+'/'+responseId+'/'+attachmentId;
+      await env.MEDIA.put(objectKey,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||'application/octet-stream'}});
+      attachmentRows.push({id:attachmentId,objectKey,filename:cleanFilename(file.name),contentType:file.type||'application/octet-stream',size:Number(file.size)||0});
+    }
+    const statements=[
+      env.DB.prepare("INSERT INTO announcement_feedback_responses(id,message_id,invite_hash,body_text,body_html,responder_name,responder_email,responder_phone,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
+        .bind(responseId,messageId,view.tokenHash,bodyText,bodyHtml,responderName||null,responderEmail||null,responderPhone||null,created),
+      env.DB.prepare("UPDATE announcement_feedback_invites SET responded_at=? WHERE token_hash=?").bind(created,view.tokenHash),
+      ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_feedback_attachments(id,response_id,object_key,filename,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?)")
+        .bind(item.id,responseId,item.objectKey,item.filename,item.contentType,item.size,created))
+    ];
+    await runBatch(env,statements);
+    return json({ok:true,responseId});
+  }catch(error){
+    if(env.MEDIA)await Promise.allSettled(attachmentRows.map(item=>env.MEDIA.delete(item.objectKey)));
+    throw error;
   }
-  const statements=[
-    env.DB.prepare("INSERT INTO announcement_feedback_responses(id,message_id,invite_hash,body_text,body_html,created_at) VALUES(?,?,?,?,?,?)").bind(responseId,messageId,view.tokenHash,bodyText,bodyHtml,created),
-    env.DB.prepare("UPDATE announcement_feedback_invites SET responded_at=? WHERE token_hash=?").bind(created,view.tokenHash),
-    ...attachmentRows.map(item=>env.DB.prepare("INSERT INTO announcement_feedback_attachments(id,response_id,object_key,filename,content_type,size_bytes,created_at) VALUES(?,?,?,?,?,?,?)").bind(item.id,responseId,item.objectKey,item.filename,item.contentType,item.size,created))
-  ];
-  await runBatch(env,statements);
-  return json({ok:true,responseId});
 }
+
 async function feedbackResponses(env,user,messageId){
   const message=await env.DB.prepare("SELECT id,title,created_by_email FROM announcement_messages WHERE id=? AND kind='feedback_request'").bind(messageId).first();
   if(!message)return json({error:'Feedback request not found'},{status:404});
