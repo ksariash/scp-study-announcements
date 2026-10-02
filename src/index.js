@@ -589,7 +589,7 @@ async function saveUser(request,env,admin){
 
 async function route(request,env){
   await setup(env);const url=new URL(request.url),path=url.pathname;
-  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:3,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:4,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
   if(path==='/api/meta'){
     const count=await env.DB.prepare("SELECT COUNT(*) n FROM announcement_users").first();
     const config=emailConfigStatus(env),adminCount=Number(count?.n||0);
@@ -612,6 +612,7 @@ async function route(request,env){
   if(path.startsWith('/poll/')&&request.method==='GET'){const pollId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await pollView(env,pollId,token);return html(pollPage(pollId,token,data))}
   const voteMatch=path.match(/^\/api\/polls\/([^/]+)\/vote$/);if(voteMatch&&request.method==='POST')return votePoll(request,env,decodeURIComponent(voteMatch[1]));
   if(path.startsWith('/feedback/')&&request.method==='GET'){const messageId=path.split('/')[2]||'',token=url.searchParams.get('t')||'',data=await feedbackInviteView(env,messageId,token);return html(feedbackResponsePage(messageId,token,data))}
+  const messageMediaMatch=path.match(/^\/message-media\/([^/]+)$/);if(messageMediaMatch&&request.method==='GET')return messageMedia(request,env,decodeURIComponent(messageMediaMatch[1]));
   const feedbackSubmit=path.match(/^\/api\/feedback-requests\/([^/]+)\/respond$/);if(feedbackSubmit&&request.method==='POST')return submitFeedbackResponse(request,env,decodeURIComponent(feedbackSubmit[1]));
   const user=await requireUser(request,env);
   if(path==='/api/me'&&request.method==='GET')return json(publicUser(user));
@@ -630,7 +631,7 @@ async function route(request,env){
 export default {
   async fetch(request,env){
     const url=new URL(request.url);
-    if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/poll/')||url.pathname==='/health'){
+    if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/poll/')||url.pathname.startsWith('/feedback/')||url.pathname.startsWith('/message-media/')||url.pathname==='/health'){
       try{return await route(request,env)}catch(error){return json({error:error?.message||'Server error'},{status:Number(error?.status)||500})}
     }
     return env.ASSETS.fetch(request);
