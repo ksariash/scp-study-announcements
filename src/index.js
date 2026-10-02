@@ -279,6 +279,7 @@ async function createMessage(request,env,user){
   const messageId=crypto.randomUUID(),pollId=kind==='poll'?crypto.randomUUID():null,created=nowIso();
   const audienceLabel=audienceType==='broadcast'?'All SCP students':chabura+' · '+region;
   const attachmentRows=[];
+  let mediaPersisted=false;
 
   try{
     for(const file of media){
@@ -311,6 +312,7 @@ async function createMessage(request,env,user){
       pollOptions.forEach((label,index)=>statements.push(env.DB.prepare("INSERT INTO announcement_poll_options(poll_id,option_id,label,sort_order) VALUES(?,?,?,?)").bind(pollId,crypto.randomUUID(),label,index)));
     }
     await runBatch(env,statements);
+    mediaPersisted=true;
 
     const studyUrl=text(env.STUDY_APP_URL,500)||'https://scp-study.ksariash.workers.dev';
     if(kind==='announcement'&&audienceType==='broadcast'){
@@ -351,7 +353,7 @@ async function createMessage(request,env,user){
     }
     return json({ok:true,messageId,pollId,students:count.students,pushEnabled:count.pushEnabled,audienceLabel,attachments:attachmentRows.length});
   }catch(error){
-    if(env.MEDIA){
+    if(env.MEDIA&&!mediaPersisted){
       await Promise.allSettled(attachmentRows.map(item=>env.MEDIA.delete(item.objectKey)));
     }
     throw error;
