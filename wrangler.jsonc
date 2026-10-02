@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "scp-study-announcements",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-02",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/poll/*", "/health"]
+  },
+  "vars": {
+    "CURRENT_ZMAN": "2026-summer",
+    "STUDY_APP_URL": "https://scp-study.ksariash.workers.dev"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "scp-study-analytics-db",
+      "database_id": "832e0e9e-c8b9-434f-b9ef-4ad2f1a85117"
+    }
+  ]
+}
