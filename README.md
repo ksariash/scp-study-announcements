@@ -57,7 +57,7 @@ For a Resend test sender, `EMAIL_FROM` may be set to `SCP Study <onboarding@rese
 
 - Fixes Add Poll Option so a new option is always blank and not browser-autofilled from the previous option.
 - Sent messages show received and read counts from inbox state.
-- Adds Feedback request messages with anonymous rich-text student replies.
+- Adds Feedback request messages with rich-text student replies that are anonymous by default, with optional contact details when a student wants a direct response.
 - Adds up to three image/audio/video attachments per feedback reply, stored privately in Cloudflare R2.
 - Senders/admins can review feedback responses and attachments from Sent.
 
