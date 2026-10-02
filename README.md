@@ -60,3 +60,13 @@ For a Resend test sender, `EMAIL_FROM` may be set to `SCP Study <onboarding@rese
 - Adds Feedback request messages with anonymous rich-text student replies.
 - Adds up to three image/audio/video attachments per feedback reply, stored privately in Cloudflare R2.
 - Senders/admins can review feedback responses and attachments from Sent.
+
+
+## Release 4
+
+- Administrators can review the full sent-message history across instructors.
+- Instructors can attach up to three images, audio files, or videos to announcements, polls, and feedback requests.
+- Feedback forms now offer optional name, email, and phone fields.
+- Feedback responses provide one-click email, call, text, and WhatsApp actions when corresponding contact information was supplied.
+- Added direct navigation to SCP Study and the Analytics Dashboard.
+- Public feedback and protected message-media capability URLs are explicitly routed through the Worker.
