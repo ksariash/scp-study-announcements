@@ -5,3 +5,99 @@
 .feedback-response-body p{margin:.35em 0}
 .feedback-response-body ul,.feedback-response-body ol{padding-left:1.3em}
 .feedback-response-card .chips a{text-decoration:none}
+
+
+/* v4: cross-app navigation, instructor media, and feedback contact actions */
+.app-header-actions{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.app-links{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.app-links a{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:34px;
+  padding:6px 10px;
+  border:1px solid #d9e2ef;
+  border-radius:10px;
+  background:#fff;
+  color:#294f92;
+  font-size:.78rem;
+  font-weight:750;
+  text-decoration:none;
+}
+.app-links a:hover{background:#f1f5fb}
+.message-media-field{
+  display:grid;
+  gap:7px;
+  margin-top:12px;
+  padding:12px;
+  border:1px solid #dbe4f0;
+  border-radius:12px;
+  background:#f8faff;
+  color:#43536b;
+  font-weight:750;
+}
+.message-media-field > span{
+  display:flex;
+  align-items:baseline;
+  gap:6px;
+}
+.message-media-field span small,
+.message-media-field > small{
+  color:#718096;
+  font-size:.72rem;
+  font-weight:500;
+}
+.message-media-field input[type="file"]{
+  width:100%;
+  font:inherit;
+  color:#536177;
+}
+.feedback-contact{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:baseline;
+  gap:6px 10px;
+  margin:9px 0;
+  padding:10px 11px;
+  border:1px solid #e0e7f1;
+  border-radius:11px;
+  background:#f8faff;
+}
+.feedback-contact strong{color:#243c68}
+.feedback-contact span{color:#65748b;font-size:.8rem}
+.contact-actions{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  width:100%;
+  margin-top:3px;
+}
+.contact-action{
+  display:inline-flex;
+  align-items:center;
+  min-height:30px;
+  padding:4px 8px;
+  border:1px solid #cfdaea;
+  border-radius:9px;
+  background:#fff;
+  color:#2759ad;
+  font-size:.74rem;
+  font-weight:750;
+  text-decoration:none;
+}
+@media(max-width:640px){
+  .app-header{align-items:flex-start}
+  .app-header-actions{align-items:flex-end;gap:8px}
+  .app-links{order:2;width:100%;justify-content:flex-end}
+  .app-links a{min-height:32px;padding:5px 8px;font-size:.72rem}
+}
