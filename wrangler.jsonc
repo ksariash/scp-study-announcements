@@ -11,7 +11,8 @@
       "/api/*",
       "/poll/*",
       "/health",
-      "/feedback/*"
+      "/feedback/*",
+      "/message-media/*"
     ]
   },
   "vars": {
