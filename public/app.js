@@ -23,16 +23,36 @@ document.querySelectorAll('[data-command]').forEach(btn=>btn.addEventListener('c
 $('linkBtn').addEventListener('click',()=>{const url=prompt('Link URL');if(!url)return;try{const parsed=new URL(url);if(!['http:','https:'].includes(parsed.protocol))throw new Error();command('createLink',parsed.href)}catch(_){alert('Use a valid http or https URL.')}});
 document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
 
+function activeTabName(){
+  return document.querySelector('.tab.active')?.dataset.tab||'compose';
+}
+function chaburaPermissionForType(kind){
+  if(me?.isAdmin)return true;
+  return kind==='poll'?!!me?.allowChaburaPolls:!!me?.allowChaburaAnnouncements;
+}
+async function refreshPermissionUi({refreshActivePanel=true}={}){
+  me=await api('/api/me');
+  $('accountLabel').textContent=me.displayName||me.email;
+  $('adminTabBtn').classList.toggle('hidden',!me.isAdmin);
+
+  const active=activeTabName();
+  if(active==='admin'&&!me.isAdmin)switchTab('compose');
+
+  chaburas=(await api('/api/chaburas')).chaburas||[];
+  renderAudience();
+  ensurePollOptions();
+  await refreshAudienceCount();
+
+  const current=activeTabName();
+  if(refreshActivePanel&&current==='sent')await loadSent();
+  if(refreshActivePanel&&current==='admin'&&me.isAdmin)await loadAdmin();
+  return true;
+}
+
 async function boot(){
   try{
-    me=await api('/api/me');
+    await refreshPermissionUi({refreshActivePanel:false});
     $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');
-    $('accountLabel').textContent=me.displayName||me.email;
-    $('adminTabBtn').classList.toggle('hidden',!me.isAdmin);
-    chaburas=(await api('/api/chaburas')).chaburas||[];
-    renderAudience();
-    ensurePollOptions();
-    refreshAudienceCount();
   }catch(error){
     $('loginView').classList.remove('hidden');$('appView').classList.add('hidden');
     try{
@@ -58,9 +78,12 @@ $('logoutBtn').addEventListener('click',async()=>{try{await api('/api/auth/logou
 
 function renderAudience(){
   const select=$('audienceSelect');select.innerHTML='';
-  (me.chaburas||[]).forEach(item=>{const option=document.createElement('option');option.value='chabura:'+btoa(unescape(encodeURIComponent(JSON.stringify(item))));option.textContent=item.chabura+' · '+item.region;select.appendChild(option)});
-  if(me.allowBroadcasts||me.isAdmin){const option=document.createElement('option');option.value='broadcast';option.textContent='All SCP students';select.appendChild(option)}
-  if(!select.options.length){const option=document.createElement('option');option.value='';option.textContent='No permitted audiences';select.appendChild(option)}
+  const kind=$('messageType')?.value||'announcement';
+  if(chaburaPermissionForType(kind)){
+    (me?.chaburas||[]).forEach(item=>{const option=document.createElement('option');option.value='chabura:'+btoa(unescape(encodeURIComponent(JSON.stringify(item))));option.textContent=item.chabura+' · '+item.region;select.appendChild(option)});
+  }
+  if(me?.allowBroadcasts||me?.isAdmin){const option=document.createElement('option');option.value='broadcast';option.textContent='All SCP students';select.appendChild(option)}
+  if(!select.options.length){const option=document.createElement('option');option.value='';option.textContent='No permitted audiences for this message type';select.appendChild(option)}
 }
 function audiencePayload(){
   const value=$('audienceSelect').value;
@@ -83,7 +106,7 @@ async function refreshAudienceCount(){
   }catch(error){$('audienceSummary').textContent=error.message;return null}
 }
 $('audienceSelect').addEventListener('change',refreshAudienceCount);
-$('messageType').addEventListener('change',()=>{$('pollFields').classList.toggle('hidden',$('messageType').value!=='poll');ensurePollOptions();refreshAudienceCount()});
+$('messageType').addEventListener('change',()=>{$('pollFields').classList.toggle('hidden',$('messageType').value!=='poll');ensurePollOptions();renderAudience();refreshAudienceCount()});
 
 function addPollOption(value=null){
   const row=document.createElement('div');row.className='poll-option';
@@ -232,7 +255,16 @@ $('userForm').addEventListener('submit',async event=>{
   const assignments=[...$('chaburaPicker').querySelectorAll('input:checked')].map(input=>({region:input.dataset.region,chabura:input.dataset.chabura}));
   const payload={email:$('userEmail').value.trim(),displayName:$('userName').value.trim(),isAdmin:$('permAdmin').checked,allowChaburaAnnouncements:$('permAnnouncements').checked,allowChaburaPolls:$('permPolls').checked,allowBroadcasts:$('permBroadcasts').checked,active:$('userActive').checked,sendInvite:$('sendInvite').checked,chaburas:assignments};
   showStatus('userStatus','Saving…');
-  try{const result=await api('/api/admin/users',{method:'POST',body:JSON.stringify(payload)});showStatus('userStatus',result.warning||'Saved.');await loadAdmin();setTimeout(()=>$('userForm').classList.add('hidden'),result.warning?1400:500)}
+  try{
+    const result=await api('/api/admin/users',{method:'POST',body:JSON.stringify(payload)});
+    showStatus('userStatus',result.warning||'Saved.');
+    try{await refreshPermissionUi({refreshActivePanel:true})}
+    catch(refreshError){
+      if(refreshError.status===401){location.reload();return}
+      throw refreshError;
+    }
+    setTimeout(()=>$('userForm').classList.add('hidden'),result.warning?1400:500);
+  }
   catch(error){showStatus('userStatus',error.message)}
 });
 
