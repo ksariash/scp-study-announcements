@@ -70,3 +70,12 @@ For a Resend test sender, `EMAIL_FROM` may be set to `SCP Study <onboarding@rese
 - Feedback responses provide one-click email, call, text, and WhatsApp actions when corresponding contact information was supplied.
 - Added direct navigation to SCP Study and the Analytics Dashboard.
 - Public feedback and protected message-media capability URLs are explicitly routed through the Worker.
+
+
+## Release 5
+
+- Reworks the authenticated header into a shared top-right icon switcher for Study, Dashboard, and Sign out, including compact mobile behavior.
+- Moves the signed-in account name under the Announcements title.
+- Refreshes `/api/me`, permitted audiences, tab visibility, and scoped Sent/Admin content immediately after account permission changes.
+- Filters Chabura audience choices by the permission required for the selected message type.
+- Adds overflow-safe header, card, form-control, and long-text rules consistent with the broader SCP app suite.
