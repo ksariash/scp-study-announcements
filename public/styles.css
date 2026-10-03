@@ -101,3 +101,102 @@
   .app-links{order:2;width:100%;justify-content:flex-end}
   .app-links a{min-height:32px;padding:5px 8px;font-size:.72rem}
 }
+
+
+/* v5: shared SCP suite header and overflow-safe permission UI */
+.app-header{
+  align-items:flex-start;
+  min-width:0;
+}
+.app-title-block{
+  flex:1 1 auto;
+  min-width:0;
+}
+.account-name{
+  display:block;
+  max-width:100%;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:.72rem;
+  font-weight:700;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+.app-header-actions{
+  flex:0 0 auto;
+  min-width:0;
+  flex-wrap:nowrap;
+  gap:0;
+}
+.app-links{
+  width:auto;
+  flex:0 0 auto;
+  flex-wrap:nowrap;
+  gap:6px;
+}
+.app-links a.icon-action,
+.app-links button.icon-action{
+  width:38px;
+  min-width:38px;
+  height:38px;
+  min-height:38px;
+  padding:0;
+  display:grid;
+  place-items:center;
+  border:1px solid #d9e2ef;
+  border-radius:10px;
+  background:#fff;
+  color:#294f92;
+  text-decoration:none;
+  box-shadow:none;
+}
+.app-links a.icon-action:hover,
+.app-links a.icon-action:focus-visible,
+.app-links button.icon-action:hover,
+.app-links button.icon-action:focus-visible{
+  background:#f1f5fb;
+  border-color:#c1d0e5;
+  outline:none;
+}
+.app-links .icon-action svg{
+  width:18px;
+  height:18px;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.panel,.sent-card,.user-card,.admin-form,.compose-grid,.permission-grid,
+.app-header>*,.section-head>*{
+  min-width:0;
+}
+.stack input,.stack select,.compose-grid input,.compose-grid select,
+.title-field input,.directory-tools input,.message-media-field input{
+  max-width:100%;
+  box-sizing:border-box;
+}
+.sent-card h3,.user-card h3,.feedback-response-body,.status,.meta{
+  overflow-wrap:anywhere;
+}
+@media(max-width:640px){
+  .shell{width:min(100% - 20px,980px)}
+  .app-header{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    align-items:start;
+    gap:10px;
+  }
+  .app-title-block{grid-column:1}
+  .app-header-actions{grid-column:2;justify-self:end;align-items:flex-start}
+  .app-links{order:0;width:auto;justify-content:flex-end;gap:5px}
+  .app-links a.icon-action,
+  .app-links button.icon-action{
+    width:36px;
+    min-width:36px;
+    height:36px;
+    min-height:36px;
+  }
+  .app-header h1{font-size:1.22rem;line-height:1.2}
+  .account-name{font-size:.68rem}
+}
