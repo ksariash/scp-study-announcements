@@ -125,4 +125,32 @@ Public poll, feedback, and message-media capability URLs must be routed through 
 
 ## Cross-app navigation
 
-Announcements should provide clear links to the Study and Analytics Dashboard applications. Keep external SCP-app URLs centralized or visibly identifiable so deployment-domain changes are easy to update.
+Announcements is part of one instructor workflow with Study and Analytics Dashboard. Keep Study, Dashboard, and Sign out together in the header's top-right utility group, in that order with Sign out rightmost. Use matching compact icon actions with `aria-label` and `title`; keep the same top-right placement on mobile rather than wrapping the app links underneath the title.
+
+Production origins:
+- Study: `https://scp-study.ksariash.workers.dev/`
+- Dashboard: `https://scp-study-analytics.ksariash.workers.dev/`
+
+The signed-in display name belongs under the Announcements title, not inside the utility group.
+
+## Permission-driven UI refresh
+
+Treat `/api/me` as the current source of truth for permissions. After an administrator saves an account change, refresh current-session permission state and re-render permission-dependent UI immediately:
+- Admin-tab visibility and active-tab fallback;
+- assigned Chabura audiences;
+- message-type/audience availability;
+- the signed-in display name;
+- currently open Sent/Admin data when its visibility scope depends on permissions.
+
+Do not require a page refresh for these changes. If the current account becomes inactive and the session can no longer load, return to the sign-in flow.
+
+## Shared SCP suite design contract
+
+Study, Analytics Dashboard, and Announcements should read as one product family.
+
+- Use the restrained navy/blue palette, white surfaces, cool-gray borders, modest shadows, and compact rounded controls already established by the suite.
+- Prefer familiar icons for compact utility/navigation actions. Icon-only controls require both `aria-label` and `title`.
+- Header layout is a flexible title/content region with `min-width:0` plus a non-wrapping utility region with `flex:0 0 auto`. On narrow screens the utility region remains top-right.
+- All flex/grid children that can contain dynamic content must be shrink-safe. Use `min-width:0`; form controls use `width:100%`, `max-width:100%`, and `box-sizing:border-box`. Long names, email addresses, and content must wrap or truncate intentionally rather than widening a panel.
+- Reuse existing button, card, spacing, radius, and border patterns before adding one-off variants.
+- Before release, inspect authenticated desktop and narrow-mobile layouts, long account names, Admin forms, Sent cards, dialogs, and permission transitions—not only JavaScript syntax.
