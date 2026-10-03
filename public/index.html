@@ -28,13 +28,23 @@
 
     <section id="appView" class="hidden">
       <header class="app-header">
-        <div><span class="eyebrow">SCP Study</span><h1>Announcements</h1></div>
+        <div class="app-title-block">
+          <span class="eyebrow">SCP Study</span>
+          <h1>Announcements</h1>
+          <span class="account-name" id="accountLabel"></span>
+        </div>
         <div class="app-header-actions">
-          <nav class="app-links" aria-label="SCP apps">
-            <a href="https://scp-study.ksariash.workers.dev/" target="_blank" rel="noopener">Study</a>
-            <a href="https://scp-study-analytics.ksariash.workers.dev/" target="_blank" rel="noopener">Dashboard</a>
+          <nav class="app-links" aria-label="SCP applications">
+            <a id="studyAppLink" class="icon-action" href="https://scp-study.ksariash.workers.dev/" target="_blank" rel="noopener" title="Study" aria-label="Open Study">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 6.5c3-1 5.1-.5 7.5 1v11c-2.4-1.5-4.5-2-7.5-1v-11Zm15 0c-3-1-5.1-.5-7.5 1v11c2.4-1.5 4.5-2 7.5-1v-11Z"/></svg>
+            </a>
+            <a id="dashboardAppLink" class="icon-action" href="https://scp-study-analytics.ksariash.workers.dev/" target="_blank" rel="noopener" title="Instructor Dashboard" aria-label="Open Instructor Dashboard">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9h3v10H5Zm5.5 0V5h3v14h-3Zm5.5 0v-7h3v7h-3Z"/></svg>
+            </a>
+            <button id="logoutBtn" class="icon-action" type="button" title="Sign out" aria-label="Sign out">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4M18 12H9"/></svg>
+            </button>
           </nav>
-          <div class="account"><span id="accountLabel"></span><button id="logoutBtn" class="icon-action" title="Sign out" aria-label="Sign out">↪</button></div>
         </div>
       </header>
 
