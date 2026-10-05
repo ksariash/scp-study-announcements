@@ -200,3 +200,15 @@
   .app-header h1{font-size:1.22rem;line-height:1.2}
   .account-name{font-size:.68rem}
 }
+
+/* v6: SCP-family identity and segmented verification code */
+.brand-mark{display:block;background:none;box-shadow:0 7px 18px rgba(13,34,82,.2)}
+.code-field{min-width:0;margin:0;padding:0;border:0}
+.code-field legend{margin:0 0 6px;padding:0;color:#58667c;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.045em}
+.code-boxes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.code-boxes .code-digit{min-width:0;height:54px;padding:0;text-align:center;border-radius:12px;font-size:1.4rem;font-weight:850;font-variant-numeric:tabular-nums;caret-color:#275bd6}
+.code-boxes .code-digit:focus{border-color:#5f85d9;box-shadow:0 0 0 3px rgba(39,91,214,.12)}
+.app-title-block{display:flex;align-items:center;gap:10px}
+.app-title-copy{min-width:0}
+.app-title-mark{display:block;width:42px;height:42px;flex:0 0 auto;border-radius:11px;box-shadow:0 5px 14px rgba(13,34,82,.16)}
+@media(max-width:640px){.app-title-mark{width:36px;height:36px}.code-boxes{gap:6px}.code-boxes .code-digit{height:50px;font-size:1.25rem}}

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SCP Study Announcements">
+  <defs>
+    <linearGradient id="a-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#143f94"/><stop offset="1" stop-color="#061638"/></linearGradient>
+    <linearGradient id="a-blue" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#25a9ff"/><stop offset="1" stop-color="#1762ff"/></linearGradient>
+    <linearGradient id="a-gold" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#ffad17"/><stop offset="1" stop-color="#fff27a"/></linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#a-bg)" stroke="#2c72ff" stroke-width="2"/>
+  <path d="M20 40h24c-3-4-4-7-4-14a8 8 0 0 0-16 0c0 7-1 10-4 14Z" fill="url(#a-blue)"/>
+  <path d="M27 44c1 4 3 6 5 6s4-2 5-6" fill="url(#a-gold)"/>
+  <path d="M17 19c-3 3-5 7-5 12m35-12c3 3 5 7 5 12" fill="none" stroke="url(#a-gold)" stroke-width="3" stroke-linecap="round"/>
+</svg>

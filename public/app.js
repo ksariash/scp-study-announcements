@@ -65,15 +65,46 @@ async function boot(){
 }
 $('emailForm').addEventListener('submit',async event=>{
   event.preventDefault();pendingEmail=$('loginEmail').value.trim();showStatus('loginStatus','Sending code…');
-  try{await api('/api/auth/request-code',{method:'POST',body:JSON.stringify({email:pendingEmail})});$('emailForm').classList.add('hidden');$('codeForm').classList.remove('hidden');showStatus('loginStatus','If this email is authorized, a verification code is on the way.');$('loginCode').focus();}
+  try{await api('/api/auth/request-code',{method:'POST',body:JSON.stringify({email:pendingEmail})});$('emailForm').classList.add('hidden');$('codeForm').classList.remove('hidden');clearLoginCode();showStatus('loginStatus','If this email is authorized, a verification code is on the way.');codeDigits[0]?.focus();}
   catch(error){showStatus('loginStatus',error.message)}
 });
-$('codeForm').addEventListener('submit',async event=>{
-  event.preventDefault();showStatus('loginStatus','Verifying…');
-  try{await api('/api/auth/verify',{method:'POST',body:JSON.stringify({email:pendingEmail,code:$('loginCode').value.trim()})});$('loginCode').value='';await boot();}
-  catch(error){showStatus('loginStatus',error.message)}
+const codeDigits=[...document.querySelectorAll('.code-digit')];
+let codeVerifying=false,lastVerifiedCode='';
+function loginCodeValue(){return codeDigits.map(input=>input.value.replace(/\D/g,'').slice(0,1)).join('')}
+function clearLoginCode(){codeDigits.forEach(input=>{input.value=''});lastVerifiedCode=''}
+async function submitLoginCode({manual=false}={}){
+  const code=loginCodeValue();
+  if(code.length!==6){if(manual)showStatus('loginStatus','Enter all six digits.');return}
+  if(codeVerifying||(!manual&&code===lastVerifiedCode))return;
+  codeVerifying=true;lastVerifiedCode=code;$('verifyCodeBtn').disabled=true;showStatus('loginStatus','Verifying…');
+  try{await api('/api/auth/verify',{method:'POST',body:JSON.stringify({email:pendingEmail,code})});clearLoginCode();await boot();}
+  catch(error){showStatus('loginStatus',error.message);codeDigits[5]?.focus();codeDigits[5]?.select()}
+  finally{codeVerifying=false;$('verifyCodeBtn').disabled=false}
+}
+function fillCodeDigits(raw,start=0){
+  const digits=String(raw||'').replace(/\D/g,'');if(!digits)return;
+  let index=Math.max(0,Math.min(codeDigits.length-1,start));
+  for(const digit of digits){if(index>=codeDigits.length)break;codeDigits[index++].value=digit}
+  lastVerifiedCode='';
+  codeDigits[Math.min(index,codeDigits.length-1)]?.focus();
+  if(loginCodeValue().length===6)void submitLoginCode();
+}
+codeDigits.forEach((input,index)=>{
+  input.addEventListener('input',()=>{
+    const raw=input.value;if(raw.length>1){input.value='';fillCodeDigits(raw,index);return}
+    input.value=raw.replace(/\D/g,'').slice(-1);lastVerifiedCode='';
+    if(input.value&&index<codeDigits.length-1)codeDigits[index+1].focus();
+    if(loginCodeValue().length===6)void submitLoginCode();
+  });
+  input.addEventListener('keydown',event=>{
+    if(event.key==='Backspace'&&!input.value&&index>0){event.preventDefault();codeDigits[index-1].value='';lastVerifiedCode='';codeDigits[index-1].focus()}
+    else if(event.key==='ArrowLeft'&&index>0){event.preventDefault();codeDigits[index-1].focus()}
+    else if(event.key==='ArrowRight'&&index<codeDigits.length-1){event.preventDefault();codeDigits[index+1].focus()}
+  });
+  input.addEventListener('paste',event=>{const pasted=event.clipboardData?.getData('text')||'';if(!/\d/.test(pasted))return;event.preventDefault();fillCodeDigits(pasted,index)});
 });
-$('backToEmail').addEventListener('click',()=>{$('codeForm').classList.add('hidden');$('emailForm').classList.remove('hidden');showStatus('loginStatus','')});
+$('codeForm').addEventListener('submit',event=>{event.preventDefault();void submitLoginCode({manual:true})});
+$('backToEmail').addEventListener('click',()=>{clearLoginCode();$('codeForm').classList.add('hidden');$('emailForm').classList.remove('hidden');showStatus('loginStatus','')});
 $('logoutBtn').addEventListener('click',async()=>{try{await api('/api/auth/logout',{method:'POST',body:'{}'})}catch(_){}location.reload()});
 
 function renderAudience(){
