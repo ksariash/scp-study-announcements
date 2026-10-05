@@ -8,6 +8,12 @@ This Worker is the authenticated composition/admin surface for SCP Study announc
 
 The current Zman is `2026-summer`.
 
+### Shared D1 initialization invariant
+
+Do not assume the Analytics Worker, a cron task, an admin route, or another Announcements request has already initialized shared D1 schema. Every request path that reads or writes a runtime-managed table/column must invoke its idempotent schema ensure/migration before the first database operation that depends on it. Keep any duplicated/shared schema expectations compatible with Analytics.
+
+For every D1-affecting change, validate the affected route as the **first request** against a clean local database, and account for a partially migrated production database where legacy tables exist but a newly required table/column does not. A warmed-database happy path is not sufficient validation.
+
 ## Deployment authority
 
 A request to implement a change normally means: inspect current `main` → implement → run `npm run build` → commit atomically to `main` → let Cloudflare deploy → inspect the Cloudflare Workers Builds result.
@@ -57,13 +63,13 @@ The durable inbox is `app_notifications` in the shared D1 database. Push is a de
 
 Rich message HTML must be server-sanitized to the small allowlist in `sanitizeRichHtml()`. Never trust contenteditable HTML from the browser.
 
-Chabura messages are materialized as per-installation inbox records so only that chabura sees them. Broadcast announcements may use one global inbox record. Polls always use per-installation invitation tokens so each recipient has one anonymous vote token.
+Chabura messages are materialized as per-anonymous-learner inbox records so only that chabura sees them. The legacy database/API field remains `installation_id`; sync-enabled devices deliberately share that value. Broadcast announcements may use one global inbox record. Polls use the same anonymous learner identity so linked devices do not create extra votes.
 
 Do not expose anonymous installation IDs in admin UI or public poll URLs. Poll URLs use random invite tokens.
 
 ## Recipient counts
 
-"Students" means known anonymous installations, not verified human identities. "Push enabled" means distinct anonymous installations with an active stored PushSubscription. Keep those labels accurate.
+"Students" means known anonymous learner IDs, not verified human identities. For unsynced users this is still effectively one installation; linked devices share one learner ID. "Push enabled" means anonymous learners with at least one active stored PushSubscription. Keep those labels accurate and do not count multiple linked device endpoints as multiple students.
 
 ## UI
 
