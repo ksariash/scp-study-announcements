@@ -86,6 +86,18 @@ Changes to notification storage or rendering may require coordinated releases in
 
 Deploy backward-compatible storage/API changes before a client starts depending on them.
 
+## Planned one-time wider-production cutover
+
+The owner plans one exceptional clean cutover for a rewritten test when the new custom domains are live. This is a runbook, **not authorization to erase production data**. Do not reset D1 until the owner explicitly gives a same-turn go-ahead after confirming the new content and domains are ready. After this release, normal migrations must preserve production data; never infer permission for another reset from this exception.
+
+Target public origins are `https://scp-study.com`, `https://dashboard.scp-study.com`, and `https://announcements.scp-study.com`. Update `STUDY_APP_URL`, the Dashboard navigation target, and any origin/VAPID configuration as part of the coordinated cutover. A custom domain is a new browser origin, so sessions, local storage, Push subscriptions, and installed Home Screen state do not migrate automatically; expect instructors to sign in on the new Announcements origin and users to re-enable Push as needed.
+
+The rewritten Study content must use a **new permanent Zman ID** rather than reusing `2026-summer`. The owner must approve the final ID. Synchronize `src/chaburas.js` from that Zman's canonical Study chabura list and change Announcements' current-Zman configuration only as part of the coordinated release, after Analytics is ready for the new Zman.
+
+Announcements shares `scp-study-analytics-db` with Analytics. Immediately before any authorized clean reset, verify the exact D1 target, export a recoverable backup, and record known-good Git/Cloudflare versions/configuration. A full D1 reset deletes Announcements accounts, sessions, sent-message/poll records, push/VAPID rows, notification/sync state, analytics/feedback, and R2 media metadata. It does **not** delete the R2 objects themselves; do not wipe R2 unless separately and explicitly authorized. Losing D1 media metadata may orphan those R2 objects.
+
+After an explicitly authorized reset, exercise the normal idempotent schema creation as a fresh-database first request, then re-bootstrap the first admin using the documented `BOOTSTRAP_ADMIN_EMAIL` flow; do not persist the bootstrap email in source. Verify sign-in/OTP, account administration, sending announcements and polls, Study inbox/push delivery, and all custom-domain navigation. Retain the D1 backup until the wider-production release is accepted.
+
 
 ## Cloudflare variable persistence and diagnostics
 
@@ -160,3 +172,4 @@ Study, Analytics Dashboard, and Announcements should read as one product family.
 - All flex/grid children that can contain dynamic content must be shrink-safe. Use `min-width:0`; form controls use `width:100%`, `max-width:100%`, and `box-sizing:border-box`. Long names, email addresses, and content must wrap or truncate intentionally rather than widening a panel.
 - Reuse existing button, card, spacing, radius, and border patterns before adding one-off variants.
 - Before release, inspect authenticated desktop and narrow-mobile layouts, long account names, Admin forms, Sent cards, dialogs, and permission transitions—not only JavaScript syntax.
+- iOS Home Screen artwork is a separate compatibility surface from the SVG favicon. Keep the unique Announcements SVG favicon and also ship a 180×180 PNG at `/apple-touch-icon.png`; render an explicit `<link rel="apple-touch-icon" sizes="180x180" ...>` in the document head. Version the icon URLs whenever artwork changes so a newly added Home Screen shortcut is not served stale icon metadata.

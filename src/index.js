@@ -591,7 +591,7 @@ async function saveUser(request,env,admin){
 
 async function route(request,env){
   await setup(env);const url=new URL(request.url),path=url.pathname;
-  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:6,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
+  if(path==='/health')return json({ok:true,service:'scp-study-announcements',version:7,zman:env.CURRENT_ZMAN||CURRENT_ZMAN});
   if(path==='/api/meta'){
     const count=await env.DB.prepare("SELECT COUNT(*) n FROM announcement_users").first();
     const config=emailConfigStatus(env),adminCount=Number(count?.n||0);
